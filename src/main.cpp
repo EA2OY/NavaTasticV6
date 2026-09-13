@@ -644,6 +644,65 @@ void setup()
     powerStatus->observe(&power->newStatus);
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
 
+    // ============================================================================================
+    // NAVARICO-V6 - PRE-CHECK DE BATERIA AL ARRANCAR (portado de NavaTastic V5.1)
+    // ============================================================================================
+    // POR QUE EXISTE: un nodo solar que arranca con la bateria por los suelos se queda encendido
+    // gastando lo poco que queda hasta que el monitor de Power lo duerme (decenas de segundos). Este
+    // pre-check lo apaga ANTES de encender pantalla, GPS o radio, protegiendo la celula del
+    // brownout y ahorrando ese consumo inutil. Es el diseno de resiliencia del proyecto.
+    //
+    // REGLA DE LECTURA (decision D34 del operador, NO cambiar):
+    //   - 8 lecturas REALES (readPowerStatus(true) evita la cache de 5 s del monitor), TODAS por
+    //     debajo del corte.
+    //   - Cualquier lectura buena ABORTA el apagado (antirrebote ESTRICTO, no una mayoria).
+    //   - El espaciado de 200 ms es INMUNIDAD AL RUIDO DE RF, no un antirrebote generico: en zona de
+    //     RF alta la conmutacion de la radio perturba el divisor de tension y el ADC da valores
+    //     falsos. NO acortar el espaciado ni cambiar el criterio: un apagado falso deja el nodo MUDO
+    //     en el monte. Es parametro ajustable por perfil (USERPREFS_LOW_BATTERY_READINGS_COUNT).
+    //   - El CONTADOR del monitor (low_voltage_counter) NO se toca aqui: las lecturas forzadas no lo
+    //     incrementan (Power.cpp lo garantiza con "if (!force && ...)"), asi que este pre-check no
+    //     interfiere con el monitor.
+    // Si la placa no tiene las claves en su perfil, este bloque NO se compila (comportamiento 2.8).
+#if defined(USERPREFS_LOW_BATTERY_LOWPOWER_ENABLED) && USERPREFS_LOW_BATTERY_LOWPOWER_ENABLED
+    {
+#ifdef USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV
+        const uint16_t preCheckCutoffMv = USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV;
+#else
+        const uint16_t preCheckCutoffMv = 3500;
+#endif
+#ifdef USERPREFS_LOW_BATTERY_READINGS_COUNT
+        const uint8_t preCheckReadings = USERPREFS_LOW_BATTERY_READINGS_COUNT;
+#else
+        const uint8_t preCheckReadings = 8;
+#endif
+        // Asentamiento tras el reset (inrush del MCU) antes de la primera medida.
+        delay(500);
+        uint8_t preCheckLow = 0;
+        int preCheckLastMv = 0;
+        for (uint8_t i = 0; i < preCheckReadings; i++) {
+            power->readPowerStatus(true); // lectura ADC REAL, sin la cache de 5 s
+            const int mvNow = powerStatus->getBatteryVoltageMv();
+            const bool isLow = powerStatus->getHasBattery() && !powerStatus->getHasUSB() && mvNow > 0 && mvNow < preCheckCutoffMv;
+            if (!isLow)
+                break; // cualquier lectura buena aborta el apagado (criterio estricto)
+            preCheckLastMv = mvNow;
+            preCheckLow++;
+            delay(200); // inmunidad al ruido de RF: NO acortar
+        }
+        if (preCheckLow >= preCheckReadings) {
+            LOG_WARN("Pre-check: bateria %d mV por debajo del corte (%d mV) en %d lecturas seguidas -> apagado",
+                     preCheckLastMv, preCheckCutoffMv, preCheckReadings);
+            // Dormir para siempre: la unica salida es que suba la tension (despertar por LPCOMP,
+            // reactivado en el variant de la placa) o que alguien pulse el boton.
+            doDeepSleep(UINT32_MAX, true, true);
+        }
+    }
+#endif
+    // ============================================================================================
+    // FIN DEL PRE-CHECK
+    // ============================================================================================
+
 #ifdef USE_MCP23017
     // Bring up the I2C IO expander (LoRa reset, LCD reset, GPS wake) now that the PMU rails are up,
     // before the I2C scan and radio/display init

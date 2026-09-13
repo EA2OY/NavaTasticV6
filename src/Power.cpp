@@ -283,6 +283,11 @@ class HasBatteryLevel
      */
     virtual uint16_t getBattVoltage() { return 0; }
 
+    // NAVARICO-V6: pide a la clase de bateria que la PROXIMA lectura de tension sea real, saltandose
+    // su cache interna. Lo usa el pre-check de bateria del arranque. Por defecto no hace nada: las
+    // clases que no cachean (o que no lo necesitan) no tienen que implementarlo.
+    virtual void requestForcedRead() {}
+
     /**
      * return true if there is a battery installed in this unit
      */
@@ -365,6 +370,11 @@ static void battery_adcDisable()
 class AnalogBatteryLevel : public HasBatteryLevel
 {
   public:
+    // NAVARICO-V6: marca para forzar UNA lectura real de tension (saltandose el limite de 5 s del
+    // ADC). La levanta Power::readPowerStatus(force=true), que es lo que usa el pre-check de bateria
+    // del arranque: necesita medidas independientes, no 8 copias de la misma muestra cacheada.
+    void requestForcedRead() override { forceReadPending = true; }
+
     // NAVARICO-V6: curva OCV ajustable en caliente (portado de NavaTastic V5.1). Se sincroniza con
     // el array OCV de Power, que es el que usa Power::readPowerStatus() como umbral de corte para
     // el deep sleep por bateria. Rango valido de cutoff: 2400-3600 mV.
@@ -482,9 +492,13 @@ class AnalogBatteryLevel : public HasBatteryLevel
         float operativeAdcMultiplier =
             config.power.adc_multiplier_override > 0 ? config.power.adc_multiplier_override : ADC_MULTIPLIER;
         // Do not call analogRead() often.
+        // NAVARICO-V6: si el llamante pidio una lectura FORZADA (pre-check de bateria del arranque)
+        // se salta este limite a proposito, para obtener medidas independientes en vez de la misma
+        // muestra cacheada. La marca la pone Power::readPowerStatus(force) justo antes de leer.
         const uint32_t min_read_interval = 5000;
-        if (!initial_read_done || !Throttle::isWithinTimespanMs(last_read_time_ms, min_read_interval)) {
+        if (forceReadPending || !initial_read_done || !Throttle::isWithinTimespanMs(last_read_time_ms, min_read_interval)) {
             last_read_time_ms = millis();
+            forceReadPending = false; // la marca vale para UNA lectura (la que pidio el pre-check)
 
             uint32_t raw = 0;
             float scaled = 0;
@@ -690,6 +704,9 @@ class AnalogBatteryLevel : public HasBatteryLevel
     bool initial_read_done = false;
     float last_read_value = (OCV[NUM_OCV_POINTS - 1] * NUM_CELLS);
     uint32_t last_read_time_ms = 0;
+    // NAVARICO-V6: si esta a true, la PROXIMA lectura se hace de verdad saltandose el limite de 5 s.
+    // Lo levanta requestForcedRead() (pre-check de bateria del arranque) y se baja tras usarlo.
+    bool forceReadPending = false;
 #ifdef ARCH_STM32
     // 3300mV placeholder for STM32 errata where VREFINT factory calibration may be missing
     // (e.g. STM32U0, see DS14756 Rev 3 §2.4.1 "VREFINT offset")
@@ -1166,9 +1183,17 @@ void Power::shutdown()
 /// Reads power status to powerStatus singleton.
 //
 // TODO(girts): move this and other axp stuff to power.h/power.cpp.
-void Power::readPowerStatus()
+// NAVARICO-V6: "force" (por defecto false) hace que la lectura de tension sea REAL, saltandose la
+// cache de 5 s del ADC. Lo usa el pre-check de bateria del arranque, que necesita medidas
+// independientes. El resto de llamadas no cambia de comportamiento.
+void Power::readPowerStatus(bool force)
 {
     int32_t batteryVoltageMv = -1; // Assume unknown
+    // NAVARICO-V6: si nos piden una lectura REAL, se levanta la marca que hace que la clase de
+    // bateria se salte su limite de 5 s (ver forceReadPending en AnalogBatteryLevel). Se baja
+    // despues de leer, para no afectar a las lecturas normales del monitor.
+    if (force && batteryLevel)
+        batteryLevel->requestForcedRead();
     int8_t batteryChargePercent = -1;
     OptionalBool usbPowered = OptUnknown;
     OptionalBool hasBattery = OptUnknown; // These must be static because NRF_APM
