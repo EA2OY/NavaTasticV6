@@ -17,7 +17,7 @@ import os
 
 Import("env")
 
-WARM_REGION_BASE = 0xEB000  # keep in sync with WARM_FLASH_REGION_BASE in WarmNodeStore.h (2 x 4 KB record-ring desde NAVARICO-V6 13/09; antes 3 paginas / 0xEA000)
+WARM_REGION_BASE = 0xEC000  # keep in sync with WARM_FLASH_REGION_BASE in WarmNodeStore.h (1 x 4 KB record-ring desde NAVARICO-V6 13/09; antes 2 paginas / 0xEB000 y 3 / 0xEA000)
 
 _tc = env.PioPlatform().get_package_dir("toolchain-gccarmnoneeabi") or ""
 _NM = os.path.join(_tc, "bin", "arm-none-eabi-nm")

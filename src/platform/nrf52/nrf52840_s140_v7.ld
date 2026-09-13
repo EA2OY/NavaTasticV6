@@ -5,12 +5,13 @@ GROUP(-lgcc -lc -lnosys)
 
 MEMORY
 {
-  /* App region ends at 0xEB000: the warm-node-store record-ring is now 2 x 4 KB pages
-   * (src/mesh/WarmNodeStore.h, NAVARICO-V6 13/09) instead of 3, which returns 4 KB to the
-   * firmware. The ring still sits directly below the stock LittleFS partition at 0xED000, and
-   * LittleFS itself is NOT moved. Boards on the framework-default linker script are covered by
-   * the post-link guard in extra_scripts/nrf52_warm_region.py instead. */
-  FLASH (rx)     : ORIGIN = 0x27000, LENGTH = 0xEB000 - 0x27000
+  /* App region ends at 0xEC000: the warm-node-store record-ring is 1 x 4 KB page
+   * (src/mesh/WarmNodeStore.h, NAVARICO-V6 13/09). Con el anillo en RAM-only, sus paginas de flash
+   * no las usa nadie, asi que se devuelven al firmware. LittleFS (0xED000) NO se mueve: moverlo
+   * exigiria mudar los ficheros del nodo y eso es trabajo aparte, pendiente y documentado. Boards on
+   * the framework-default linker script are covered by the post-link guard in
+   * extra_scripts/nrf52_warm_region.py instead. */
+  FLASH (rx)     : ORIGIN = 0x27000, LENGTH = 0xEC000 - 0x27000
 
   /* SRAM required by Softdevice depend on
    * - Attribute Table Size (Number of Services and Characteristics)

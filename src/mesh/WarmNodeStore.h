@@ -92,16 +92,19 @@ inline bool warmXeddsaSignedOf(const WarmNodeEntry &e)
 // valid only on the 1 MB-flash nRF52840.
 #if defined(NRF52840_XXAA)
 #define WARM_FLASH_PAGE_SIZE 4096u
-// NAVARICO-V6 (decision 13/09): 3 -> 2 paginas. Motivo: con el motor /nava dentro, el firmware se
-// pasaba del tope del enlazador por 832 B y NO habia margen. Reducir el anillo a 2 paginas mueve la
-// region a 0xEB000-0xED000: el firmware gana 4 KB y LittleFS (que empieza en 0xED000) NO se toca
-// (moverlo obligaria a reubicar el sistema de ficheros, donde viven /resilience.bin y la config, y
-// en un nodo ya desplegado eso puede acabar en formateo).
-// Es un valor PREVISTO por el propio codigo: el static_assert de mas abajo calcula el limite con
-// 2 paginas (216 registros); con 2 quedan 72 slots, coherentes con WARM_NODE_COUNT=100.
-// El anillo sigue pegado por debajo de LittleFS, como exige su direccionamiento (base + i*4096).
-#define WARM_FLASH_PAGES 2u
-#define WARM_FLASH_REGION_BASE (0xED000u - WARM_FLASH_PAGES * WARM_FLASH_PAGE_SIZE) // 0xEB000
+// NAVARICO-V6 (decision 13/09): 3 -> 2 -> 1 pagina. El objetivo final es recuperar las 3 paginas
+// (12 KB) para el firmware, en dos tramos:
+//   TRAMO 1 (este): 1 pagina = la region baja a 0xEC000-0xED000. El firmware gana 4 KB mas (8 KB
+//     en total desde el estado original de 2.8) y NO se mueve nada mas: LittleFS sigue en 0xED000
+//     y no hay ninguna migracion de datos. RIESGO CERO.
+//   TRAMO 2 (pendiente, ver cerebro.md): bajar el origen de LittleFS para recuperar los 8 KB
+//     restantes. Eso SI exige mudar los ficheros del nodo en el primer arranque; necesita banco y
+//     esta documentado como trabajo aparte.
+// Con 1 pagina el anillo queda sin rotacion (36 registros por pagina; el static_assert de mas abajo
+// comprueba que siguen cabiendo los 100 slots vivos). En esta configuracion el anillo NO escribe en
+// flash (parche RAM-only), asi que su tamano solo afecta a la cache en RAM.
+#define WARM_FLASH_PAGES 1u
+#define WARM_FLASH_REGION_BASE (0xED000u - WARM_FLASH_PAGES * WARM_FLASH_PAGE_SIZE) // 0xEC000
 #define WARM_FLASH_PAGE_ADDR(i) (WARM_FLASH_REGION_BASE + (i)*WARM_FLASH_PAGE_SIZE)
 #endif
 
