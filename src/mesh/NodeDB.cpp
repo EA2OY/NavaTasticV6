@@ -3088,6 +3088,16 @@ bool NodeDB::saveDeviceStateToDisk()
 
 bool NodeDB::saveNodeDatabaseToDisk()
 {
+#if defined(USERPREFS_NODEDB_RAM_ONLY) && USERPREFS_NODEDB_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): la base de nodos es dato AUTOMATICO de malla y no se escribe en
+    // flash (norma D4 del proyecto). Se devuelve true sin escribir: el llamante no debe tratarlo
+    // como fallo (un false dispara reintentos y puede acabar en formateo del sistema de ficheros).
+    // Contrapartida: tras un reinicio la lista de nodos empieza vacia y se repuebla sola oyendo
+    // la malla. Los ESP32 no se ven afectados por este camino (alli la persistencia de nodos ya
+    // esta desactivada de serie).
+    LOG_DEBUG("NodeDB: RAM-only (USERPREFS_NODEDB_RAM_ONLY), no se guarda la base de nodos");
+    return true;
+#else
     // Don't persist the node DB until this device has a PKI keypair
     // TODO: revisit when https://github.com/meshtastic/firmware/pull/10478 lands
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
@@ -3201,6 +3211,7 @@ bool NodeDB::saveNodeDatabaseToDisk()
     warmStore.saveIfDirty();
 #endif
     return ok;
+#endif // USERPREFS_NODEDB_RAM_ONLY
 }
 
 bool NodeDB::saveToDiskNoRetry(int saveWhat)

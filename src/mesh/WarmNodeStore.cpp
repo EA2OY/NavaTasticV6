@@ -363,24 +363,39 @@ void WarmNodeStore::ringAppend(const WarmNodeEntry &rec, int storeSlot)
 
 void WarmNodeStore::persistEntry(const WarmNodeEntry &e)
 {
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    (void)e; // NAVARICO-V6 (RAM-only): entries[] ya lo tiene - no se toca el anillo de flash
+#else
     concurrency::LockGuard g(spiLock);
     ringAppend(e, static_cast<int>(&e - entries));
+#endif
 }
 
 void WarmNodeStore::persistRemove(NodeNum num, int storeSlot)
 {
     if (storeSlot >= 0 && storeSlot < static_cast<int>(WARM_NODE_COUNT))
         pageOf[storeSlot] = 0xFF;
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    (void)num; // NAVARICO-V6 (RAM-only): entries[] ya se limpio arriba - no hay lapida que escribir
+#else
     WarmNodeEntry tomb;
     memset(&tomb, 0, sizeof(tomb));
     tomb.num = num;
     tomb.last_heard = WARM_RING_TOMBSTONE;
     concurrency::LockGuard g(spiLock);
     ringAppend(tomb, -1);
+#endif
 }
 
 void WarmNodeStore::persistClear()
 {
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): clear() ya dejo entries[]/pageOf[] a cero - no hay nada que borrar
+    activePage = 0xFF;
+    writeSlot = 0;
+    nextSeq = 1;
+    dirty = false;
+#else
     concurrency::LockGuard g(spiLock);
     flash_nrf5x_flush();
     for (uint8_t p = 0; p < WARM_FLASH_PAGES; p++)
@@ -389,12 +404,28 @@ void WarmNodeStore::persistClear()
     writeSlot = 0;
     nextSeq = 1;
     dirty = false; // the erased ring already reflects the empty store
+#endif
 }
 
 void WarmNodeStore::load()
 {
     if (!entries)
         return;
+
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): no se reproduce el anillo de flash - cada arranque empieza vacio.
+    // Contrapartida aceptada: se pierde el descifrado de DM con nodos desalojados hasta que
+    // vuelvan a intercambiar NodeInfo. A cambio, NINGUNA escritura de datos de malla en flash
+    // (norma D4 del proyecto). Los ESP32 ya funcionan asi de serie con /prefs/warm.dat.
+    // NOTA: va ANTES del candado a proposito (no hay nada que proteger y asi no se anida).
+    activePage = 0xFF;
+    writeSlot = 0;
+    nextSeq = 1;
+    dirty = false;
+    LOG_INFO("WarmStore: RAM-only (USERPREFS_WARMSTORE_RAM_ONLY), arranca vacio");
+    return;
+#endif
+
     concurrency::LockGuard g(spiLock);
 
     // Order valid pages by ascending seq so replay applies oldest first
@@ -493,6 +524,9 @@ void WarmNodeStore::load()
 
 bool WarmNodeStore::save()
 {
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    return true; // NAVARICO-V6 (RAM-only): no se escribio nada en el anillo, no hay nada que volcar
+#else
     if (!powerHAL_isPowerLevelSafe()) {
         LOG_ERROR("Trying to save WarmStore on unsafe device power level");
         return false;
@@ -500,6 +534,7 @@ bool WarmNodeStore::save()
     concurrency::LockGuard g(spiLock);
     flash_nrf5x_flush();
     return true;
+#endif
 }
 
 #else // !NRF52840_XXAA --------------------
@@ -543,6 +578,18 @@ void WarmNodeStore::load()
     // Clear first - all failure paths below then correctly represent "empty",
     // even if load() is called on an already-used instance.
     memset(entries, 0, WARM_NODE_COUNT * sizeof(WarmNodeEntry));
+
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): no se lee /prefs/warm.dat - cada arranque empieza vacio.
+    // NOTA: va ANTES del candado a proposito (no hay fichero que abrir y asi no se anida).
+    activePage = 0xFF;
+    writeSlot = 0;
+    nextSeq = 1;
+    dirty = false;
+    LOG_INFO("WarmStore: RAM-only (USERPREFS_WARMSTORE_RAM_ONLY), arranca vacio (%s no se lee)", warmFileName);
+    return;
+#endif
+
     concurrency::LockGuard g(spiLock);
     auto f = FSCom.open(warmFileName, FILE_O_READ);
     if (!f)
@@ -604,6 +651,9 @@ bool WarmNodeStore::save()
 {
     if (!entries)
         return false;
+#if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
+    return true; // NAVARICO-V6 (RAM-only): nunca se escribe /prefs/warm.dat
+#endif
     if (!powerHAL_isPowerLevelSafe()) {
         LOG_ERROR("Trying to save WarmStore on unsafe device power level");
         return false;

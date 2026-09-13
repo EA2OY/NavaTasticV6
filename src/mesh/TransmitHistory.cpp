@@ -4,7 +4,11 @@
 #include "gps/RTC.h"
 #include <Throttle.h>
 
+// NAVARICO-V6: con USERPREFS_TRANSMITHISTORY_RAM_ONLY se cae al bloque "stub" de abajo, que
+// mantiene el seguimiento EN MEMORIA y no toca /prefs. Motivo (norma D4 del proyecto): el
+// historial de transmisiones es dato automatico de malla y no debe escribirse en flash.
 #ifdef FSCom
+#if !(defined(USERPREFS_TRANSMITHISTORY_RAM_ONLY) && USERPREFS_TRANSMITHISTORY_RAM_ONLY)
 
 TransmitHistory *transmitHistory = nullptr;
 
@@ -310,5 +314,7 @@ void TransmitHistory::clear()
     history.clear();
     lastMillis.clear();
 }
+
+#endif
 
 #endif
