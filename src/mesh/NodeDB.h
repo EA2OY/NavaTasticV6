@@ -413,6 +413,12 @@ class NodeDB
 
     bool factoryReset(bool eraseBleBonds = false);
 
+    /// NAVARICO-V6 (portado de NavaTastic V5.1, fix I20): aplica los defaults de perfil SIN borrar
+    /// /prefs. Misma configuracion final que factoryReset, pero con escrituras normales: en ESP32 el
+    /// rmDir de /prefs deja colgada la siguiente escritura de LittleFS y el nodo entra en bucle de
+    /// reinicios. Lo usa el despliegue de primera instalacion del motor /nava SOLO en ESP32.
+    void applyProfileDefaults(bool preserveKey);
+
     LoadFileResult loadProto(const char *filename, size_t protoSize, size_t objSize, const pb_msgdesc_t *fields,
                              void *dest_struct);
     bool saveProto(const char *filename, size_t protoSize, const pb_msgdesc_t *fields, const void *dest_struct,

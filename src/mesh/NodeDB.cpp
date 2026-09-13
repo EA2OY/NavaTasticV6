@@ -885,11 +885,32 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
     return true;
 }
 
+// NAVARICO-V6 (portado de NavaTastic V5.1, fix I20): defaults de perfil SIN borrar /prefs.
+// POR QUE EXISTE: en ESP32, factoryReset() hace rmDir("/prefs") y la PRIMERA escritura posterior en
+// LittleFS (MessageStore::clearAllMessages) se queda colgada con loopTask bloqueado -> el watchdog
+// reinicia en bucle (Heltec V4). Esta funcion deja la MISMA configuracion final que factoryReset,
+// pero sobrescribiendo los ficheros con escrituras normales, que si funcionan.
+// Lo usa el despliegue de primera instalacion del motor /nava SOLO en ESP32; en nRF52 se conserva
+// factoryReset(), que esta verificado en banco. NO unificar los dos caminos: son distintos a
+// proposito.
+void NodeDB::applyProfileDefaults(bool preserveKey)
+{
+    LOG_INFO("Install profile defaults (sin rmDir de /prefs)");
+    installDefaultNodeDatabase();
+    installDefaultDeviceState();
+    installDefaultConfig(preserveKey); // conserva el par PKI si se pide
+    installDefaultModuleConfig();
+    installDefaultChannels();
+    if (transmitHistory) {
+        transmitHistory->clear();
+    }
+    saveToDisk();
+}
+
 void NodeDB::installDefaultNodeDatabase()
 {
     LOG_DEBUG("Install default NodeDatabase");
-    nodeDatabase.version = DEVICESTATE_CUR_VER;
-    nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
+    nodeDatabase.version = DEVICESTATE_CUR_VER;    nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
     concurrency::LockGuard satelliteGuard(&satelliteMutex);
