@@ -92,7 +92,9 @@ class Power : public concurrency::OSThread
     Power();
 
     void powerCommandsCheck();
-    void readPowerStatus();
+    // NAVARICO-V6: "force" obtiene una lectura ADC REAL saltandose la cache de 5 s (lo usa el
+    // pre-check de bateria del arranque). Por defecto false: comportamiento original de 2.8.
+    void readPowerStatus(bool force = false);
     void logHeapUsage();
     virtual bool setup();
     virtual int32_t runOnce() override;
