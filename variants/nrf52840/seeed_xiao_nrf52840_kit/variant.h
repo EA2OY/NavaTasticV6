@@ -208,6 +208,16 @@ static const uint8_t SCK = PIN_SPI_SCK;
 
 #define BATTERY_SENSE_RESOLUTION_BITS (10)
 
+// NAVARICO-V6: DESPERTAR POR BATERIA (LPCOMP), activado por decision del operador (13/09).
+// Meshtastic 2.8 lo tiene desactivado en esta placa; NavaTastic V5.1 lo activaba: es lo que permite
+// que un nodo solar que se apago por bateria baja vuelva a arrancar cuando el sol recarga.
+// OJO al divisor: el Xiao usa 1M/510k (~0.3377), NO 0.5, asi que los niveles 1-5 calibrados al
+// Promicro serian inalcanzables aqui. Se usa el umbral de fabrica: 3/8 de VDD = ~3.67V reales.
+// (Vale tanto para el Xiao con su modulo SX1262 como para el Xiao con el modulo E22P: es la misma
+// placa, cambia solo el modulo de radio pinchado.)
+#define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_7
+#define BATTERY_LPCOMP_THRESHOLD NRF_LPCOMP_REF_SUPPLY_3_8
+
 /*
  * Wire Interfaces
  * Keep this section after potentially conflicting pin definitions

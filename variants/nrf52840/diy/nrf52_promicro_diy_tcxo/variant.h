@@ -291,6 +291,17 @@ settings.
 #define PIN_EINK_RES (32 + 1)
 #define PIN_EINK_BUSY (32 + 6)
 
+// NAVARICO-V6: DESPERTAR POR BATERIA (LPCOMP). Meshtastic 2.8 lo tiene desactivado en esta placa;
+// NavaTastic V5.1 lo activaba y es el mecanismo que hace que un nodo solar que se apago por bateria
+// baja VUELVA a arrancar cuando el sol recarga. Sin esto, el nodo se queda apagado hasta que alguien
+// lo encienda a mano (en la montana, sin boton: mudo). Decision del operador (13/09), coherente con
+// el diseño de resiliencia del proyecto.
+// Umbral: AIN7 con el divisor 0.5 del Promicro (1M/1M) -> 9/16 de VDD = ~3.71V reales de bateria.
+// El nivel efectivo lo puede ajustar el operador en caliente con /nava set_vwake (niveles 1-5);
+// este define es solo el valor por defecto del arranque.
+#define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_7
+#define BATTERY_LPCOMP_THRESHOLD NRF_LPCOMP_REF_SUPPLY_9_16
+
 #ifdef __cplusplus
 }
 #endif

@@ -210,8 +210,14 @@ No longer populated on PCB
 #define ADC_MULTIPLIER (4.916F)
 
 // rf52840 AIN2 = Pin 4
-// commented out due to power leakage of 2.9mA in shutdown state see reported issue #8801
-// #define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_2 //UNSAFE
+// OJO - AVISO ORIGINAL DE MESHTASTIC (se conserva a proposito):
+//   "commented out due to power leakage of 2.9mA in shutdown state see reported issue #8801"
+// NAVARICO-V6: se REACTIVA por decision expresa del operador (13/09), coherente con el diseño de
+// resiliencia del proyecto: Meshtastic lo desactivo para evitar esa fuga en apagado, pero sin el
+// despertar por LPCOMP un nodo solar que se apaga por bateria baja NO VUELVE a arrancar cuando el
+// sol recarga: se queda apagado hasta que alguien lo encienda a mano (en la montaña, sin boton:
+// mudo). Coste aceptado y consciente: 2,9 mA de fuga mientras el nodo esta apagado.
+#define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_2 // NAVARICO: reactivado (era "UNSAFE" en Meshtastic)
 
 // We have AIN2 with a VBAT divider so AIN2 = VBAT * (100/490)
 // We have the device going deep sleep under 3.1V, which is AIN2 = 0.63V

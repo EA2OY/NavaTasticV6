@@ -147,6 +147,17 @@ extern "C" {
 
 #define PIN_SERIAL2_RX (-1)
 #define PIN_SERIAL2_TX (-1)
+
+// NAVARICO-V6: DESPERTAR POR BATERIA (LPCOMP), activado por decision del operador (13/09).
+// Meshtastic 2.8 lo tiene desactivado en esta placa; NavaTastic V5.1 lo activaba: es lo que permite
+// que un nodo solar que se apago por bateria baja vuelva a arrancar cuando el sol recarga. Sin esto
+// el nodo se queda apagado hasta que alguien lo encienda a mano.
+// OJO al divisor: el Seed NO usa 0.5, usa ~0.303 (ADC_MULTIPLIER 3.3), asi que los niveles 1-5
+// calibrados al Promicro serian inalcanzables aqui. Se usa el umbral de fabrica de la placa:
+// 3/8 de VDD = ~3.67V reales de bateria.
+#define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_7
+#define BATTERY_LPCOMP_THRESHOLD NRF_LPCOMP_REF_SUPPLY_3_8
+
 #ifdef __cplusplus
 }
 #endif
