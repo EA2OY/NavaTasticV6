@@ -1294,8 +1294,28 @@ void Power::readPowerStatus()
     // have more than 10 low readings in a row. NOTE: min LiIon/LiPo voltage
     // is 2.0 to 2.5V, current OCV min is set to 3100 that is large enough.
     //
-
+    // NAVARICO-V6 (bloque de energia): el umbral y el numero de lecturas salen del PERFIL
+    // (USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV / _READINGS_COUNT), que es como estaba disenado en
+    // NavaTastic. Sin esas claves se conserva el comportamiento de 2.8 (OCV minimo, 10 lecturas).
+    // HISTERESIS (decision del operador, D34): para APAGAR hacen falta todas las lecturas seguidas
+    // por debajo del corte; para RECUPERAR basta una por encima del corte + 100 mV. El margen de
+    // 100 mV evita el traqueteo cuando la tension oscila justo en el limite.
     if (batteryLevel && powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
+#if defined(USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV) && defined(USERPREFS_LOW_BATTERY_READINGS_COUNT)
+        const uint16_t lowCutoffMv = USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV;
+        const uint8_t lowReadingsNeeded = USERPREFS_LOW_BATTERY_READINGS_COUNT;
+        const int32_t vNow = batteryLevel->getBattVoltage();
+        if (vNow < (int32_t)lowCutoffMv * NUM_CELLS) {
+            low_voltage_counter++;
+            LOG_DEBUG("Low voltage counter: %d/%d", low_voltage_counter, lowReadingsNeeded);
+            if (low_voltage_counter >= lowReadingsNeeded) {
+                LOG_INFO("Low voltage detected, trigger deep sleep");
+                powerFSM.trigger(EVENT_LOW_BATTERY);
+            }
+        } else if (vNow > (int32_t)(lowCutoffMv + 100) * NUM_CELLS) {
+            low_voltage_counter = 0;
+        }
+#else
         if (batteryLevel->getBattVoltage() < OCV[NUM_OCV_POINTS - 1]) {
             low_voltage_counter++;
             LOG_DEBUG("Low voltage counter: %d/10", low_voltage_counter);
@@ -1306,6 +1326,7 @@ void Power::readPowerStatus()
         } else {
             low_voltage_counter = 0;
         }
+#endif
     }
 }
 

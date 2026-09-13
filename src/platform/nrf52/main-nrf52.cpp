@@ -99,6 +99,56 @@ __attribute__((noinline)) bool variant_enableBatteryLpcompWake()
     return true;
 }
 
+// NAVARICO-V6: UMBRAL LPCOMP POR PLACA.
+// Por que existe: el LPCOMP compara la tension del pin (bateria x divisor de la placa) contra una
+// fraccion de VDD. Los niveles de despertar 1-5 estan calibrados con el divisor del Promicro
+// (0.5, 1M/1M), asi que en placas con OTRO divisor esos niveles serian inalcanzables (por ejemplo
+// en la T114 el 9_16 equivaldria a 9.1V reales). Cada placa con divisor distinto usa su umbral de
+// fabrica; el Promicro conserva los 5 niveles ajustables con /nava set_vwake.
+// Es una LINEA ROJA del proyecto: no se toca sin orden expresa del operador.
+//
+// *** AVISO IMPORTANTE (13/09) ***: esta funcion solo se compila si la placa declara
+// BATTERY_LPCOMP_INPUT, y Meshtastic 2.8 lo tiene DESACTIVADO en TODAS las placas de este proyecto
+// (en la T114 esta comentado con el motivo: "power leakage of 2.9mA in shutdown state, issue #8801").
+// NavaTastic V5.1 SI lo activaba en las 4 familias, porque sin despertar por LPCOMP un nodo solar
+// que se apaga por bateria baja NO VUELVE a arrancar cuando el sol recarga (se queda mudo en el
+// monte sin boton). Es una decision de diseño del operador, NO automatica: para tenerlo hay que
+// descomentar BATTERY_LPCOMP_INPUT y BATTERY_LPCOMP_THRESHOLD en el variant.h de cada placa.
+// Con la macro sin definir, este bloque NO se compila y el comportamiento es el de la 2.8.
+#ifdef BATTERY_LPCOMP_INPUT
+nrf_lpcomp_ref_t getActiveLpcompThreshold()
+{
+#ifdef SEEED_SOLAR_NODE
+    // Seed Solar Node P1: divisor ~0.303 (no 0.5) -> umbral de fabrica (~3.67V real)
+    return BATTERY_LPCOMP_THRESHOLD; // NRF_LPCOMP_REF_SUPPLY_3_8
+#elif defined(SEEED_XIAO_NRF52840_KIT)
+    // Xiao Kit i2c / Xiao E22P: divisor de fabrica 1M/510k (~0.3377) -> umbral de fabrica
+    return BATTERY_LPCOMP_THRESHOLD; // NRF_LPCOMP_REF_SUPPLY_3_8
+#elif defined(HELTEC_T114)
+    // Heltec T114: divisor 100/490 (~0.204) -> umbral de fabrica (~4.04V real).
+    // Ojo: Meshtastic lo desactiva por una fuga de 2.9 mA en System OFF (issue #8801); aqui se
+    // mantiene ACTIVO a proposito (coste aceptado por diseno, para poder despertar con solar).
+    return BATTERY_LPCOMP_THRESHOLD; // NRF_LPCOMP_REF_SUPPLY_2_8
+#else
+    // Promicro / Faketec: divisor 0.5 -> los 5 niveles ajustables con /nava set_vwake
+    switch (currentWakeLevel) {
+    case 1:
+        return NRF_LPCOMP_REF_SUPPLY_5_16; //  ~2.06V real
+    case 2:
+        return NRF_LPCOMP_REF_SUPPLY_3_8; //  ~2.48V real
+    case 3:
+        return NRF_LPCOMP_REF_SUPPLY_9_16; //  ~3.71V real (por defecto)
+    case 4:
+        return NRF_LPCOMP_REF_SUPPLY_11_16; //  ~4.54V real (solo con bateria alta)
+    case 5:
+        return NRF_LPCOMP_REF_SUPPLY_4_8; //  ~3.30V real (LiFePO4)
+    default:
+        return (nrf_lpcomp_ref_t)BATTERY_LPCOMP_THRESHOLD;
+    }
+#endif
+}
+#endif // BATTERY_LPCOMP_INPUT
+
 static nrfx_wdt_t nrfx_wdt = NRFX_WDT_INSTANCE(0);
 static nrfx_wdt_channel_id nrfx_wdt_channel_id_nrf52_main;
 
@@ -554,20 +604,67 @@ void cpuDeepSleep(uint32_t msecToWake)
 #ifdef BATTERY_LPCOMP_INPUT
         // Only enable LPCOMP wake if the variant allows it
         if (variant_enableBatteryLpcompWake()) {
-            // Wake up if power rises again
-            nrf_lpcomp_config_t c;
-            c.reference = BATTERY_LPCOMP_THRESHOLD;
-            c.detection = NRF_LPCOMP_DETECT_UP;
-            c.hyst = NRF_LPCOMP_HYST_NOHYST;
-            nrf_lpcomp_configure(NRF_LPCOMP, &c);
+#ifdef ADC_CTRL
+            // NAVARICO-V6: mantener el divisor de tension de la bateria activo durante el sueno,
+            // para que el comparador lea la tension dividida (sin esto la lectura no es valida).
+            pinMode(ADC_CTRL, OUTPUT);
+            digitalWrite(ADC_CTRL, ADC_CTRL_ENABLED);
+#endif
+            // NAVARICO-V6: re-armado limpio (deshabilitar antes de configurar)
+            NRF_LPCOMP->ENABLE = LPCOMP_ENABLE_ENABLE_Disabled;
+
             nrf_lpcomp_input_select(NRF_LPCOMP, BATTERY_LPCOMP_INPUT);
-            nrf_lpcomp_enable(NRF_LPCOMP);
+
+            nrf_lpcomp_config_t c;
+            // NAVARICO-V6: UMBRAL POR PLACA (getActiveLpcompThreshold) en vez del valor fijo del
+            // variant. Es el diseno de NavaTastic: cada placa tiene su divisor de tension real.
+            c.reference = (nrf_lpcomp_ref_t)getActiveLpcompThreshold();            c.detection = NRF_LPCOMP_DETECT_UP; // flank up
+            // NAVARICO-V6: histéresis ACTIVA (~50 mV) para evitar el traqueteo al cargar con solar.
+            c.hyst = NRF_LPCOMP_HYST_ENABLED;
+            nrf_lpcomp_configure(NRF_LPCOMP, &c);
+
+            // NAVARICO-V6: limpiar EXPLICITAMENTE todos los latches de evento (despertares "calientes")
+            NRF_LPCOMP->EVENTS_READY = 0;
+            NRF_LPCOMP->EVENTS_DOWN = 0;
+            NRF_LPCOMP->EVENTS_UP = 0;
+            NRF_LPCOMP->EVENTS_CROSS = 0;
+
+            NRF_LPCOMP->ENABLE = LPCOMP_ENABLE_ENABLE_Enabled;
+            NRF_LPCOMP->TASKS_START = 1;
 
             battery_adcEnable();
 
-            nrf_lpcomp_task_trigger(NRF_LPCOMP, NRF_LPCOMP_TASK_START);
-            while (!nrf_lpcomp_event_check(NRF_LPCOMP, NRF_LPCOMP_EVENT_READY))
-                ;
+            // NAVARICO-V6 (endurecimiento, portado de NavaTastic V5.1): espera ACOTADA en vez de un
+            // bucle infinito. El READY del LPCOMP tarda microsegundos en condiciones validas; si no
+            // llegara, NUNCA se entra en System OFF sin fuente de despertar (el nodo quedaria mudo
+            // en el monte): se reintenta el re-armado una vez y, si sigue sin estar listo, se
+            // reinicia solo. En el caso normal (READY inmediato) el comportamiento NO cambia.
+            // OJO: este bucle sin tope es el bug real de la 2.8 (auditoria A2); no copiar el
+            // bloque de docs/guia_integracion_navarrico.md, que lo tiene sin corregir.
+            bool lpcompReady = false;
+            for (uint8_t intento = 0; intento < 2 && !lpcompReady; intento++) {
+                uint32_t t0 = micros();
+                while (NRF_LPCOMP->EVENTS_READY == 0 && (uint32_t)(micros() - t0) < 1000) {
+                    ;
+                }
+                lpcompReady = (NRF_LPCOMP->EVENTS_READY != 0);
+                if (!lpcompReady) {
+                    NRF_LPCOMP->TASKS_STOP = 1;
+                    NRF_LPCOMP->ENABLE = LPCOMP_ENABLE_ENABLE_Disabled;
+                    NRF_LPCOMP->EVENTS_READY = 0;
+                    NRF_LPCOMP->ENABLE = LPCOMP_ENABLE_ENABLE_Enabled;
+                    NRF_LPCOMP->TASKS_START = 1;
+                }
+            }
+            if (!lpcompReady) {
+                LOG_ERROR("NAVARICO: LPCOMP sin READY tras reintento; reinicio autonomo en vez de dormir sin despertar");
+                NVIC_SystemReset();
+            }
+
+            // NAVARICO-V6: limpiar otra vez y asentar, para evitar despertares inmediatos
+            NRF_LPCOMP->EVENTS_READY = 0;
+            NRF_LPCOMP->EVENTS_UP = 0;
+            delay(10);
         }
 #endif
 
@@ -602,4 +699,34 @@ void enterDfuMode()
 #else
     enterUf2Dfu();
 #endif
+}
+
+// NAVARICO-V6 (portado de NavaTastic V5.1): tension TEORICA de despertar por LPCOMP en mV, para los
+// avisos solares ([Sueno]/[Vivo]/[Listo]). Solo informativo: no cambia el hardware.
+// OJO: esta funcion se define SIEMPRE en nRF52 porque el motor /nava la llama sin condicion; si el
+// despertar por LPCOMP estuviera desactivado en la placa, devuelve el valor por defecto (nivel 3,
+// umbral del Promicro) en vez de la constante del variant, que podria no existir.
+uint16_t navaGetLpcompWakeMv()
+{
+#ifdef BATTERY_LPCOMP_INPUT
+#if defined(SEEED_SOLAR_NODE) || defined(SEEED_XIAO_NRF52840_KIT)
+    return 3670; // 3_8 real (~3.67V) con el divisor de Seed y Xiao
+#elif defined(HELTEC_T114)
+    return 4040; // 2_8 real (~4.04V) con el divisor 100/490 de la T114
+#endif
+#endif
+    switch (currentWakeLevel) {
+    case 1:
+        return 2060;
+    case 2:
+        return 2480;
+    case 3:
+        return 3710; // por defecto (LiPo/NiMH/Sodio)
+    case 4:
+        return 4540;
+    case 5:
+        return 3300; // LiFePO4
+    default:
+        return 3710;
+    }
 }
