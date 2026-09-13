@@ -4388,6 +4388,28 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
     return lite;
 }
 
+// NAVARICO-V6: portado de NavaTastic V5.1. El bit de "admin verificado" es LOCAL de cada nodo
+// (el mensaje User que va por radio no lleva el campo bitfield), asi que su posicion no afecta a
+// la malla. En la 2.8 ese bit es el 11 porque el 3 (que usaba el fork) ya es IS_FAVORITE.
+bool NodeDB::isAdminNode(const meshtastic_NodeInfoLite &n)
+{
+    return (n.bitfield & NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_MASK) != 0;
+}
+
+// NAVARICO-V6: portado de NavaTastic V5.1. "Huerfano" = favorito del que no se ha oido nada
+// (last_heard == 0). Adaptado a la estructura nueva de 2.8: se recorre la tabla caliente con
+// getMeshNodeByIndex() en vez de nodeDatabase.nodes (que en 2.8 ya no es la tabla viva).
+int NodeDB::countOrphanFavorites()
+{
+    int count = 0;
+    for (size_t i = 0; i < numMeshNodes; i++) {
+        const meshtastic_NodeInfoLite *n = getMeshNodeByIndex(i);
+        if (n && nodeInfoLiteIsFavorite(n) && n->last_heard == 0)
+            count++;
+    }
+    return count;
+}
+
 /// Sometimes we will have Position objects that only have a time, so check for
 /// valid lat/lon
 bool NodeDB::hasValidPosition(const meshtastic_NodeInfoLite *n)

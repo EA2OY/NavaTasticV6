@@ -10,6 +10,34 @@
 #define APP_WATCHDOG_SECS 90
 #define NRFX_WDT_ENABLED 1
 #define NRFX_WDT0_ENABLED 1
+
+// NAVARICO-V6: variables que el motor /nava necesita y que en NavaTastic V5.1 vivian en este mismo
+// fichero. rawResetReason = causa del ultimo reinicio (se rellena en setup(), ver mas abajo).
+uint32_t rawResetReason = 0;
+
+// NAVARICO-V6: el apagado REAL del BLE lo hace el motor poniendo config.bluetooth.enabled = false
+// (mecanismo oficial de Meshtastic, y la 2.8 lo respeta). Esta marca solo deja constancia del
+// estado pedido: en NavaTastic V5.1 se escribia pero NUNCA se leia (nadie la consultaba), asi que
+// se conserva por compatibilidad de interfaz con el motor, no porque gobierne nada.
+bool bleForceDisabled = false;
+void setBleForceDisabled(bool on)
+{
+    bleForceDisabled = on;
+}
+
+// NAVARICO-V6 - PENDIENTE: modo tormenta (hibernacion con RTC2).
+// En NavaTastic V5.1 esta funcion duerme la radio de verdad, apaga BLE/pantalla/pin de radio y
+// cuenta con RTC2 en bloques hasta despertar o resetear. NO se ha portado todavia a proposito:
+// forma parte del bloque de ENERGIA y convive con el ciclo LPCOMP y el umbral de despertar, que son
+// lineas rojas del proyecto (no se tocan sin banco). Portarlo a medias seria peor que no tenerlo:
+// un nodo que se duerme y no despierta se queda mudo en el monte.
+// MIENTRAS TANTO: el comando /nava storm avisa y NO duerme. Se porta en el bloque de energia.
+void timedSystemSleepSeconds(uint32_t seconds)
+{
+    if (seconds == 0)
+        return;
+    LOG_WARN("Storm: NO PORTADO todavia (bloque de energia pendiente). No se duerme el nodo.");
+}
 #define NRFX_WDT_CONFIG_NO_IRQ 1
 #include "nrfx_power.h"
 #include <assert.h>
@@ -422,6 +450,9 @@ void nrf52Setup()
     // per
     // https://infocenter.nordicsemi.com/index.jsp?topic=%2Fcom.nordic.infocenter.nrf52832.ps.v1.1%2Fpower.html
     LOG_DEBUG("Reset reason: 0x%x", why);
+    // NAVARICO-V6 (portado de NavaTastic V5.1): se guarda para que el motor /nava pueda contarlo
+    // como causa del reinicio en el aviso [Boot] (WDT / pin / software / lockup / LPCOMP / VBUS).
+    rawResetReason = why;
 
 #ifdef USE_SEMIHOSTING
     nrf52InitSemiHosting();

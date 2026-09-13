@@ -97,7 +97,12 @@ class Power : public concurrency::OSThread
     virtual bool setup();
     virtual int32_t runOnce() override;
     void setStatusHandler(meshtastic::PowerStatus *handler) { statusHandler = handler; }
-    const uint16_t OCV[11] = {OCV_ARRAY};
+    // NAVARICO-V6: sin "const" para poder reescribir la curva desde /nava (set_vbat / set_chem).
+    uint16_t OCV[11] = {OCV_ARRAY};
+    // NAVARICO-V6 (portado de NavaTastic V5.1): ajuste en caliente de la curva OCV y del perfil de
+    // quimica de la celula. Los usa /nava set_vbat y /nava set_chem.
+    void updateOcvCurve(uint16_t cutoff);
+    void setChemistryProfile(uint8_t chem);
     bool isLowBattery() { return low_voltage_counter >= 10; };
 
 #ifdef ARCH_ESP32
@@ -155,5 +160,9 @@ class Power : public concurrency::OSThread
 };
 
 void battery_adcEnable();
+
+// NAVARICO-V6 (portado de NavaTastic V5.1): nivel de despertar por tension (1-5). Estado
+// compartido entre el arranque (umbral LPCOMP) y el motor /nava (set_vwake). Default 3.
+extern uint8_t currentWakeLevel;
 
 extern Power *power;

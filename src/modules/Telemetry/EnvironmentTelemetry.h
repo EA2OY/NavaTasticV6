@@ -64,6 +64,11 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
         immediateSendRequestedAtMs = millis();
     }
 
+    // NAVARICO-V6: en NavaTastic V5.1 este metodo era PUBLICO y el motor /nava lo llama para forzar
+    // el envio de telemetria ambiental (comando /nava telem). En 2.8 esta en "protected". Se
+    // conserva el diseño original (publico) en vez de anadir un envoltorio: menos diff en el motor.
+    bool sendTelemetry(NodeNum dest = NODENUM_BROADCAST, bool wantReplies = false);
+
   protected:
     /** Called to handle a particular incoming message
     @return true if you've guaranteed you've handled this message and no other handlers should be considered for it
@@ -75,10 +80,6 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
     */
     bool getEnvironmentTelemetry(meshtastic_Telemetry *m);
     virtual meshtastic_MeshPacket *allocReply() override;
-    /**
-     * Send our Telemetry into the mesh
-     */
-    bool sendTelemetry(NodeNum dest = NODENUM_BROADCAST, bool wantReplies = false);
 
     virtual AdminMessageHandleResult handleAdminMessageForModule(const meshtastic_MeshPacket &mp,
                                                                  meshtastic_AdminMessage *request,

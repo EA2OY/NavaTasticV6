@@ -7,6 +7,10 @@
 #include <RadioLib.h>
 #include <sys/types.h>
 
+// NAVARICO-V6 (portado de NavaTastic V5.1): error de frecuencia de la ultima recepcion (Hz).
+// Lo rellena el driver de radio en addReceiveMetadata() y lo muestra /nava afc.
+extern float lastRxFrequencyError;
+
 // ESP32 has special rules about ISR code
 #ifdef ARDUINO_ARCH_ESP32
 #define INTERRUPT_ATTR IRAM_ATTR

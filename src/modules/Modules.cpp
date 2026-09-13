@@ -28,6 +28,9 @@
 #if !MESHTASTIC_EXCLUDE_NEIGHBORINFO
 #include "modules/NeighborInfoModule.h"
 #endif
+// NAVARICO-V6: motor /nava. Fuera de cualquier MESHTASTIC_EXCLUDE_* a proposito: es el modulo de
+// mando del proyecto y no debe poder quedarse fuera por un flag de ahorro de flash.
+#include "modules/NavaCLIModule.h"
 #if !MESHTASTIC_EXCLUDE_NODEINFO
 #include "modules/NodeInfoModule.h"
 #endif
@@ -165,6 +168,9 @@ void setupModules()
 #if !MESHTASTIC_EXCLUDE_TEXTMESSAGE
     textMessageModule = new TextMessageModule();
 #endif
+    // NAVARICO-V6: el motor /nava se crea SIEMPRE (sin guarda de exclusion). Usa el mismo puerto
+    // que TextMessageModule, asi que comparte su infraestructura de mensajes de texto.
+    navaCLIModule = new NavaCLIModule();
 #if !MESHTASTIC_EXCLUDE_TRACEROUTE
     traceRouteModule = new TraceRouteModule();
 #endif

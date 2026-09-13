@@ -430,6 +430,15 @@ class NodeDB
 
     virtual meshtastic_NodeInfoLite *getMeshNode(NodeNum n);
     size_t getNumMeshNodes() { return numMeshNodes; }
+
+    /// NAVARICO-V6 (portado de NavaTastic V5.1): true si el nodo esta marcado como administrador
+    /// verificado criptograficamente (bit 11 del bitfield). Usado para blindar al admin (no se le
+    /// desaloja), auto-favoritearlo y darle inmunidad a la supresion de NodeInfo.
+    bool isAdminNode(const meshtastic_NodeInfoLite &n);
+
+    /// NAVARICO-V6 (portado de NavaTastic V5.1): cuenta los favoritos "huerfanos" (favoritos de los
+    /// que no se ha oido nada: last_heard == 0). Sirve para limitar su numero en AdminModule.
+    int countOrphanFavorites();
     /// Find a node in our DB, create an empty NodeInfoLite if missing (evicting
     /// the oldest non-protected node when full). Public so admin handlers can
     /// register a node we have not heard from yet (e.g. to block it by ID).
@@ -812,7 +821,15 @@ extern uint32_t error_address;
 // Use this instead of `if (snr_q4)`. Legacy records (bit clear) are unambiguously "unknown".
 #define NODEINFO_BITFIELD_HAS_SNR_SHIFT 10
 #define NODEINFO_BITFIELD_HAS_SNR_MASK (1u << NODEINFO_BITFIELD_HAS_SNR_SHIFT)
-// Bits 11..31 reserved for future single-bit flags.
+// NAVARICO-V6: "nodo verificado criptograficamente como administrador". Es un bit LOCAL de cada
+// nodo (el mensaje User que viaja por radio NO lleva este campo), asi que su posicion no afecta a
+// la malla.
+// OJO, COLISION EVITADA: en NavaTastic V5.1 (sobre 2.7.26) este bit era el 3, pero en 2.8 el bit 3
+// ya es NODEINFO_BITFIELD_IS_FAVORITE. Mantener el 3 habria hecho que marcar un favorito
+// convirtiera al nodo en administrador verificado (y al reves). Se usa el 11, que la propia 2.8
+// deja reservado para esto ("Bits 11..31 reserved for future single-bit flags").
+#define NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_SHIFT 11
+#define NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_MASK (1u << NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_SHIFT)
 
 // Convenience accessors so call sites read like the old struct fields.
 inline bool nodeInfoLiteHasUser(const meshtastic_NodeInfoLite *n)

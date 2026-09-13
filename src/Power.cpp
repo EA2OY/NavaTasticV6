@@ -290,6 +290,14 @@ class HasBatteryLevel
 
     virtual bool isVbusIn() { return false; }
     virtual bool isCharging() { return false; }
+
+    // NAVARICO-V6 (portado de NavaTastic V5.1): curva OCV ajustable en caliente desde /nava
+    // (set_vbat / set_chem). En el fork estos metodos vivian en AnalogBatteryLevel; en 2.8 las
+    // clases de bateria se reorganizaron, asi que se declaran en la BASE (que es el tipo del
+    // puntero batteryLevel) y AnalogBatteryLevel los sobrescribe. Sin sobreescribir, no hacen nada
+    // (comportamiento por defecto = no tocar la curva).
+    virtual void updateOcvCurve(uint16_t cutoff) { (void)cutoff; }
+    virtual void setChemistryProfile(uint8_t chem) { (void)chem; }
 };
 #endif
 
@@ -357,6 +365,41 @@ static void battery_adcDisable()
 class AnalogBatteryLevel : public HasBatteryLevel
 {
   public:
+    // NAVARICO-V6: curva OCV ajustable en caliente (portado de NavaTastic V5.1). Se sincroniza con
+    // el array OCV de Power, que es el que usa Power::readPowerStatus() como umbral de corte para
+    // el deep sleep por bateria. Rango valido de cutoff: 2400-3600 mV.
+    void updateOcvCurve(uint16_t cutoff) override
+    {
+        if (cutoff >= 2400 && cutoff <= 3600) {
+            OCV[NUM_OCV_POINTS - 1] = cutoff;
+            OCV[NUM_OCV_POINTS - 2] = cutoff + 100;
+            OCV[NUM_OCV_POINTS - 3] = cutoff + 200;
+        }
+    }
+
+    // NAVARICO-V6: reescribe la curva completa segun la quimica de la celula (0=LiPo, 1=NiMH,
+    // 2=Sodio, 3=LiFePO4). Portado de NavaTastic V5.1; tablas identicas a las del fork.
+    void setChemistryProfile(uint8_t chem) override
+    {
+        uint16_t nueva[11];
+        if (chem == 0) {
+            uint16_t t[11] = {4190, 4050, 3990, 3890, 3800, 3720, 3630, 3530, 3420, 3300, 3100};
+            memcpy(nueva, t, sizeof(t));
+        } else if (chem == 1) {
+            uint16_t t[11] = {4300, 4100, 4000, 3900, 3800, 3700, 3600, 3500, 3450, 3400, 3400};
+            memcpy(nueva, t, sizeof(t));
+        } else if (chem == 2) {
+            uint16_t t[11] = {3950, 3800, 3700, 3600, 3500, 3400, 3200, 3000, 2800, 2600, 2500};
+            memcpy(nueva, t, sizeof(t));
+        } else if (chem == 3) {
+            uint16_t t[11] = {3650, 3550, 3450, 3380, 3320, 3270, 3220, 3170, 3100, 3000, 2800};
+            memcpy(nueva, t, sizeof(t));
+        } else {
+            return; // quimica desconocida: no se toca nada
+        }
+        memcpy(OCV, nueva, sizeof(nueva));
+    }
+
     /**
      * Battery state of charge, from 0 to 100 or -1 for unknown
      */
@@ -636,7 +679,8 @@ class AnalogBatteryLevel : public HasBatteryLevel
 
     /// For heltecs with no battery connected, the measured voltage is 2204, so
     // need to be higher than that, in this case is 2500mV (3000-500)
-    const uint16_t OCV[NUM_OCV_POINTS] = {OCV_ARRAY};
+    // NAVARICO-V6: sin "const" para poder reescribir la curva desde /nava (set_vbat / set_chem).
+    uint16_t OCV[NUM_OCV_POINTS] = {OCV_ARRAY};
     const float chargingVolt = (OCV[0] + 10) * NUM_CELLS;
     const float noBatVolt = (OCV[NUM_OCV_POINTS - 1] - 500) * NUM_CELLS;
     // Start value from minimum voltage for the filter to not start from 0
@@ -974,6 +1018,55 @@ void Power::powerCommandsCheck()
         shutdownAtMsec = 0;
         shutdown();
     }
+}
+
+// NAVARICO-V6 (portado de NavaTastic V5.1): nivel de despertar por tension (1-5). Lo consultan el
+// calculo del umbral LPCOMP y /nava (set_vwake); su valor por defecto es 3. Es estado COMPARTIDO
+// entre el arranque y el motor /nava, por eso vive aqui y no dentro del modulo.
+uint8_t currentWakeLevel = 3;
+
+// NAVARICO-V6: envoltorios de la curva OCV (portado de NavaTastic V5.1). Sincronizan TAMBIEN el
+// array OCV de la clase Power, que es el que usa readPowerStatus() como umbral de corte para el
+// deep sleep por bateria; y avisan al sensor de bateria para que ajuste su propia tabla.
+void Power::updateOcvCurve(uint16_t cutoff)
+{
+    if (cutoff >= 2400 && cutoff <= 3600) {
+        OCV[NUM_OCV_POINTS - 1] = cutoff;
+        OCV[NUM_OCV_POINTS - 2] = cutoff + 100;
+        OCV[NUM_OCV_POINTS - 3] = cutoff + 200;
+    }
+    if (batteryLevel)
+        batteryLevel->updateOcvCurve(cutoff);
+}
+
+void Power::setChemistryProfile(uint8_t chem)
+{
+    switch (chem) {
+    case 0: { // LiPo
+        uint16_t t[11] = {4190, 4050, 3990, 3890, 3800, 3720, 3630, 3530, 3420, 3300, 3100};
+        memcpy(OCV, t, sizeof(t));
+        break;
+    }
+    case 1: { // NiMH
+        uint16_t t[11] = {4300, 4100, 4000, 3900, 3800, 3700, 3600, 3500, 3450, 3400, 3400};
+        memcpy(OCV, t, sizeof(t));
+        break;
+    }
+    case 2: { // Sodio
+        uint16_t t[11] = {3950, 3800, 3700, 3600, 3500, 3400, 3200, 3000, 2800, 2600, 2500};
+        memcpy(OCV, t, sizeof(t));
+        break;
+    }
+    case 3: { // LiFePO4
+        uint16_t t[11] = {3650, 3550, 3450, 3380, 3320, 3270, 3220, 3170, 3100, 3000, 2800};
+        memcpy(OCV, t, sizeof(t));
+        break;
+    }
+    default:
+        return; // quimica desconocida: no se toca nada
+    }
+    if (batteryLevel)
+        batteryLevel->setChemistryProfile(chem);
 }
 
 void Power::reboot()

@@ -69,6 +69,15 @@ class Router : protected concurrency::OSThread, protected PacketHistory
      */
     RadioInterface *getRadioIface() { return iface.get(); }
 
+    // NAVARICO-V6: alias con el nombre que usa el motor /nava (en NavaTastic V5.1 este metodo se
+    // llamaba getInterface(); en 2.8 se renombro a getRadioIface() con el MISMO cuerpo). Se anade
+    // el alias en vez de tocar las 9 llamadas del motor: menos diff en codigo portado, menos riesgo.
+    RadioInterface *getInterface() { return iface.get(); }
+
+    // NAVARICO-V6 (portado de NavaTastic V5.1): routers oidos DIRECTAMENTE (0 saltos). Lo llena el
+    // auto-favoriteo de routers directos y lo usan el bypass de saltos y /nava (fav, status).
+    std::vector<NodeNum> activeDirectRouters;
+
     /**
      * do idle processing
      * Mostly looking in our incoming rxPacket queue and calling handleReceived.

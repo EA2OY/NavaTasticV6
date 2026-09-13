@@ -8,6 +8,9 @@
 #include "UptimeClock.h"
 #include "configuration.h"
 #include "error.h"
+
+// NAVARICO-V6 (portado de NavaTastic V5.1): error de frecuencia de la ultima recepcion (Hz).
+float lastRxFrequencyError = 0.0f;
 #include "main.h"
 #include "mesh-pb-constants.h"
 #include <pb_decode.h>
