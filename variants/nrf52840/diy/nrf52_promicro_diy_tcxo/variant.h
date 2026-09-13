@@ -165,12 +165,18 @@ https://github.com/brad112358/easy_E22
 #define LORA_CS (32 + 13) // P1.13
 
 // LORA MODULES
+// NAVARICO-V6: las 4 radios del proyecto (HT-RA62, E22, E80, E22P) son todas SX126x. RF95 (SX127x),
+// LR1121 y LR2021 son herencia de la plantilla upstream y solo engordan el binario (esta es la
+// imagen mas grande de nRF52 y va justa contra el tope de 0xEA000). Se eligen POR ENV con
+// -DNAVARICO_SOLO_SX126X (envs navarrico_*); quien suelde un LR1121/RF95 compila sin el flag.
 #define USE_LLCC68
 #define USE_SX1262
-#define USE_RF95
 #define USE_SX1268
+#ifndef NAVARICO_SOLO_SX126X
+#define USE_RF95
 #define USE_LR1121
 #define USE_LR2021
+#endif
 
 // RF95 CONFIG
 #define LORA_DIO0 (0 + 29) // P0.29 BUSY
@@ -213,6 +219,13 @@ https://github.com/brad112358/easy_E22
 #define LR2021_DIO3_TCXO_VOLTAGE 1.8
 #define LR2021_DIO_AS_RF_SWITCH
 #define LR2021_IRQ_DIO_NUM 9 // DIO9 → P0.10
+#endif
+
+// NAVARICO-V6: guarda de seguridad. Sin ninguna familia declarada el firmware compila pero no tiene
+// driver de radio: arranca mudo. Fallar el build es preferible a un nodo que no se ve en la malla.
+#if !defined(USE_SX1262) && !defined(USE_SX1268) && !defined(USE_LLCC68) && !defined(USE_RF95) &&        \
+    !defined(USE_LR1121) && !defined(USE_LR2021)
+#error "NAVARICO-V6: no hay ninguna familia de radio declarada en este variant.h"
 #endif
 
 #else // Easy E22 Promicro arrangement
