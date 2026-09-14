@@ -322,6 +322,13 @@ void NavaCLIModule::loadResiliencePrefs() {
             strncpy(owner.long_name, prefs.custom_long_name, sizeof(owner.long_name) - 1);
             owner.long_name[sizeof(owner.long_name) - 1] = '\0';
             sanitizeUtf8(owner.long_name, sizeof(owner.long_name));
+            // NAVARICO-V6 (D7 del operador): la 2.8 solo guarda 24 bytes de nombre en el nodo
+            // (MAX_LONG_NAME_BYTES) y el almacenamiento nuevo del motor sigue siendo de 40. Sin este
+            // recorte, un nombre persistido largo viajaria con 25+ bytes y el empaquetado de NodeInfo
+            // fallaria. clampLongName recorta a 24 bytes Y arregla la secuencia UTF-8 partida, que es
+            // exactamente el "recorte limpio" que pide D7. Se aplica en LOS DOS sitios donde el motor
+            // escribe el nombre (aqui y en set_name), para que no quede ningun camino sin cubrir.
+            clampLongName(owner.long_name);
             if (prefs.custom_short_name[0] != '\0') {
                 strncpy(owner.short_name, prefs.custom_short_name, sizeof(owner.short_name) - 1);
                 owner.short_name[sizeof(owner.short_name) - 1] = '\0';
@@ -3967,6 +3974,9 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             strncpy(owner.short_name, shortN.c_str(), sizeof(owner.short_name) - 1);
             owner.long_name[sizeof(owner.long_name) - 1] = '\0';
             owner.short_name[sizeof(owner.short_name) - 1] = '\0';
+            // NAVARICO-V6 (D7): mismo recorte que en el arranque. La 2.8 solo guarda 24 bytes de
+            // nombre en el nodo; sin esto, un set_name largo rompe el empaquetado de NodeInfo.
+            clampLongName(owner.long_name);
 
             // Guardar en resilience.bin como hardcodeo persistente:
             strncpy(prefs.custom_long_name, owner.long_name, sizeof(prefs.custom_long_name) - 1);
@@ -4327,6 +4337,9 @@ int32_t NavaCLIModule::runOnce()
                 if (migratedShort[0] != '\0') strncpy(owner.short_name, migratedShort, sizeof(owner.short_name) - 1);
                 sanitizeUtf8(owner.long_name, sizeof(owner.long_name));
                 sanitizeUtf8(owner.short_name, sizeof(owner.short_name));
+                // NAVARICO-V6 (D7): tercer y ultimo camino donde el motor escribe el nombre (el
+                // despliegue conserva el nombre previo). Mismo recorte a 24 bytes que en los otros dos.
+                clampLongName(owner.long_name);
                 nodeDB->updateUser(nodeDB->getNodeNum(), owner);
                 nodeDB->saveToDisk(SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE);
                 LOG_INFO("NavaCLI: Nombre previo ('%s') conservado tras el despliegue", migratedLong);
