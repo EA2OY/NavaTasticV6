@@ -10,6 +10,10 @@
 #endif
 #include "MeshRadio.h"
 #include "MeshService.h"
+// NAVARICO-V6: motor /nava. main.cpp necesita sus metodos estaticos de arranque (peekWasInSleep,
+// navaSetWasInSleep, navaSetVivoPending, navaSetReservaPending) para el pre-check de bateria y los
+// avisos solares [Vivo]/[Reserva].
+#include "modules/NavaCLIModule.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerMon.h"
@@ -676,6 +680,15 @@ void setup()
 #else
         const uint8_t preCheckReadings = 8;
 #endif
+        // V2.4: si venimos de un sueno por bateria (wasInSleep), el gate es el CORTE (no el LPCOMP):
+        // por debajo del corte el nodo puede OPERAR con normalidad. Tres bandas:
+        //   V < corte - 100 mV       -> re-sueno silencioso (proteccion brownout)
+        //   [corte-100, corte)       -> aviso [Vivo] al canal Navadmin + re-sueno tras el envio
+        //   V >= corte               -> arranque normal (el [Listo] lo manda el motor)
+        // El despertar por LPCOMP (~3,7 V) cae siempre en la banda normal.
+        // NOTA: peekWasInSleep lee /resilience.bin directamente, asi que es seguro llamarlo aqui,
+        // antes de que se cree el modulo (igual que en NavaTastic).
+        bool preCheckFromSleep = NavaCLIModule::peekWasInSleep();
         // Asentamiento tras el reset (inrush del MCU) antes de la primera medida.
         delay(500);
         uint8_t preCheckLow = 0;
@@ -691,12 +704,31 @@ void setup()
             delay(200); // inmunidad al ruido de RF: NO acortar
         }
         if (preCheckLow >= preCheckReadings) {
-            LOG_WARN("Pre-check: bateria %d mV por debajo del corte (%d mV) en %d lecturas seguidas -> apagado",
-                     preCheckLastMv, preCheckCutoffMv, preCheckReadings);
-            // Dormir para siempre: la unica salida es que suba la tension (despertar por LPCOMP,
-            // reactivado en el variant de la placa) o que alguien pulse el boton.
-            doDeepSleep(UINT32_MAX, true, true);
+            // Se han dado TODAS las lecturas por debajo del corte. Se deja constancia de que el
+            // arranque viene de un sueno por bateria, para que el motor no repita avisos.
+            NavaCLIModule::navaSetWasInSleep(true);
+            if (NavaCLIModule::peekSleepMsgsEnabled()) {
+                if (preCheckLastMv >= (int)preCheckCutoffMv - 100) {
+                    // Banda [corte-100, corte): arrancar para mandar [Vivo] y volver a dormir tras
+                    // el ciclo del monitor.
+                    LOG_WARN("Pre-check: bateria %d mV en [corte-100, corte): arranque para [Vivo] y re-sueno",
+                             preCheckLastMv);
+                    NavaCLIModule::navaSetVivoPending();
+                } else {
+                    // Reserva profunda (< corte-100): arrancar para mandar [Reserva] y volver a
+                    // dormir. Garantiza el apagado canonico de la radio por SPI.
+                    LOG_WARN("Pre-check: bateria %d mV por debajo de corte-100: arranque para [Reserva] y re-sueno",
+                             preCheckLastMv);
+                    NavaCLIModule::navaSetReservaPending();
+                }
+            } else {
+                // Sin avisos de sueno activados: no hay nada que mandar, se apaga directamente.
+                LOG_WARN("Pre-check: bateria %d mV por debajo del corte (%d mV) y avisos de sueno OFF -> apagado",
+                         preCheckLastMv, preCheckCutoffMv);
+                doDeepSleep(UINT32_MAX, true, true);
+            }
         }
+        (void)preCheckFromSleep; // informativo: el motor lo consulta por su cuenta
     }
 #endif
     // ============================================================================================
