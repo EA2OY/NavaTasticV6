@@ -315,6 +315,13 @@ static inline bool readMessageRecord(File &f, StoredMessage &m)
 
 void MessageStore::saveToFlash()
 {
+#if defined(USERPREFS_MESSAGESTORE_RAM_ONLY) && USERPREFS_MESSAGESTORE_RAM_ONLY
+    // NAVARICO-V6 (auditoria, norma D4): los TEXTOS de los mensajes oidos son dato de malla
+    // (incluidos los DMs) -> NUNCA a flash. Antes se volcaban a /Messages_default.msgs cada 2 h.
+    // Se sigue marcando "sin cambios pendientes" para que el tick de autoguardado no acumule estado.
+    g_messageStoreHasUnsavedChanges = false;
+    g_lastAutoSaveMs = Time::getMillis();
+#else
 #ifdef FSCom
     // Ensure root exists
     spiLock->lock();
@@ -340,6 +347,7 @@ void MessageStore::saveToFlash()
     // Reset autosave state after any save
     g_messageStoreHasUnsavedChanges = false;
     g_lastAutoSaveMs = Time::getMillis();
+#endif // USERPREFS_MESSAGESTORE_RAM_ONLY
 }
 
 void MessageStore::loadFromFlash()
@@ -347,6 +355,10 @@ void MessageStore::loadFromFlash()
     std::deque<StoredMessage>().swap(liveMessages);
     resetMessagePool(); // reset pool when loading
 
+#if defined(USERPREFS_MESSAGESTORE_RAM_ONLY) && USERPREFS_MESSAGESTORE_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): no se lee /Messages_*.msgs - arranca vacio y se rellena con lo que
+    // se vaya oyendo. Coherente con la guarda de saveToFlash(): si no se escribe, no hay nada que leer.
+#else
 #ifdef FSCom
     {
         concurrency::LockGuard guard(spiLock);
@@ -376,6 +388,7 @@ void MessageStore::loadFromFlash()
     if (pruneHiddenMessages())
         saveToFlash();
 #endif
+#endif // USERPREFS_MESSAGESTORE_RAM_ONLY
     // Loading messages does not trigger an autosave
     g_messageStoreHasUnsavedChanges = false;
     g_lastAutoSaveMs = Time::getMillis();
@@ -394,6 +407,7 @@ void MessageStore::clearAllMessages()
     resetMessagePool();
 
 #ifdef FSCom
+#if !(defined(USERPREFS_MESSAGESTORE_RAM_ONLY) && USERPREFS_MESSAGESTORE_RAM_ONLY)
     SafeFile f(filename.c_str(), false);
     uint8_t count = 0;
 
@@ -405,6 +419,7 @@ void MessageStore::clearAllMessages()
     }
 
     f.close();
+#endif // USERPREFS_MESSAGESTORE_RAM_ONLY
 #endif
 
 #if ENABLE_MESSAGE_PERSISTENCE

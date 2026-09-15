@@ -257,6 +257,13 @@ void WaypointStore::saveToFlash()
 {
     purgeExpired();
 
+#if defined(USERPREFS_WAYPOINTSTORE_RAM_ONLY) && USERPREFS_WAYPOINTSTORE_RAM_ONLY
+    // NAVARICO-V6 (auditoria, norma D4): los waypoints oidos son dato de malla -> NUNCA a flash.
+    // Antes se volcaban a WAYPOINT_STORE_FILENAME cada 2 h. purgeExpired() de arriba se conserva:
+    // es limpieza EN RAM y sus efectos (caducar entradas) deben seguir ocurriendo.
+    g_waypointStoreHasUnsavedChanges = false;
+    g_lastWaypointAutoSaveMs = Time::getMillis();
+#else
 #if ENABLE_WAYPOINT_PERSISTENCE && defined(FSCom)
     if (!g_waypointStoreHasUnsavedChanges)
         return;
@@ -295,12 +302,17 @@ void WaypointStore::saveToFlash()
     g_waypointStoreHasUnsavedChanges = false;
     g_lastWaypointAutoSaveMs = Time::getMillis();
 #endif
+#endif // USERPREFS_WAYPOINTSTORE_RAM_ONLY
 }
 
 void WaypointStore::loadFromFlash()
 {
     std::deque<StoredWaypoint>().swap(waypoints);
 
+#if defined(USERPREFS_WAYPOINTSTORE_RAM_ONLY) && USERPREFS_WAYPOINTSTORE_RAM_ONLY
+    // NAVARICO-V6 (RAM-only): no se lee el fichero de waypoints - arranca vacio y se rellena con lo
+    // que se vaya oyendo. Coherente con la guarda de saveToFlash(): si no se escribe, no hay que leer.
+#else
 #if ENABLE_WAYPOINT_PERSISTENCE && defined(FSCom)
     {
         concurrency::LockGuard guard(spiLock);
@@ -350,6 +362,7 @@ void WaypointStore::loadFromFlash()
     g_waypointStoreHasUnsavedChanges = false;
     g_lastWaypointAutoSaveMs = Time::getMillis();
 #endif
+#endif // USERPREFS_WAYPOINTSTORE_RAM_ONLY
 }
 
 void WaypointStore::clearAllWaypoints()
@@ -358,7 +371,7 @@ void WaypointStore::clearAllWaypoints()
 
     std::deque<StoredWaypoint>().swap(waypoints);
 
-#if ENABLE_WAYPOINT_PERSISTENCE && defined(FSCom)
+#if ENABLE_WAYPOINT_PERSISTENCE && defined(FSCom) && !(defined(USERPREFS_WAYPOINTSTORE_RAM_ONLY) && USERPREFS_WAYPOINTSTORE_RAM_ONLY)
     SafeFile f(WAYPOINT_STORE_FILENAME, false);
     {
         concurrency::LockGuard guard(spiLock);
