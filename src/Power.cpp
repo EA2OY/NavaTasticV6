@@ -24,6 +24,7 @@
 #include "configuration.h"
 #include "main.h"
 #include "meshUtils.h"
+#include "modules/NavaCLIModule.h"
 #include "power/PowerHAL.h"
 #include "power/SGM41562.h"
 #include "sleep.h"
@@ -1335,7 +1336,15 @@ void Power::readPowerStatus(bool force)
             LOG_DEBUG("Low voltage counter: %d/%d", low_voltage_counter, lowReadingsNeeded);
             if (low_voltage_counter >= lowReadingsNeeded) {
                 LOG_INFO("Low voltage detected, trigger deep sleep");
-                powerFSM.trigger(EVENT_LOW_BATTERY);
+                // NAVARICO-V6 (auditoria): repuesto el gancho del fork. Con el motor dentro, este es
+                // el unico sitio que fija wasInSleep=1 antes de dormir y manda el aviso [Sueno]; sin
+                // el, ese aviso no salia, la cola no se drenaba de forma ordenada y el fichero quedaba
+                // en wasInSleep=0 (raiz del bucle de reinicio del pre-check).
+                if (navaCLIModule && navaCLIModule->handleLowBatteryEvent()) {
+                    // control tomado por NavaCLI: aviso [Sueno] + sueno diferido al drenar la cola
+                } else {
+                    powerFSM.trigger(EVENT_LOW_BATTERY);
+                }
             }
         } else if (vNow > (int32_t)(lowCutoffMv + 100) * NUM_CELLS) {
             low_voltage_counter = 0;

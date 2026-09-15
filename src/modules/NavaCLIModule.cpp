@@ -757,11 +757,23 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
         tmp.version = NAVS_RESILIENCE_VERSION;
     }
     tmp.wasInSleep = on ? 1 : 0;
-    FSCom.remove("/resilience.bin");
-    File f = FSCom.open("/resilience.bin", FILE_O_WRITE);
+    // NAVARICO-V6 (auditoria): recalcular el CRC SIEMPRE. Antes NO se recalculaba al releer un
+    // fichero valido, asi que cambiar wasInSleep dejaba el CRC obsoleto -> al arrancar el motor lo
+    // rechazaba (Clean Slate) -> redespliegue + factoryReset -> reinicio -> bucle con borrado de
+    // configuracion mientras la bateria siguiera baja. Y escritura atomica (tmp + rename) como
+    // saveResiliencePrefs: esto corre en el arranque con bateria baja, justo cuando es probable
+    // que se corte la alimentacion a mitad de escritura.
+    tmp.crc32 = crc32Buffer(&tmp, offsetof(ResiliencePrefs, crc32));
+    File f = FSCom.open("/resilience.tmp", FILE_O_WRITE);
     if (f) {
-        f.write((uint8_t *)&tmp, sizeof(tmp));
+        size_t written = f.write((const uint8_t *)&tmp, sizeof(tmp));
         f.close();
+        if (written == sizeof(tmp)) {
+            FSCom.remove("/resilience.bin");
+            FSCom.rename("/resilience.tmp", "/resilience.bin");
+        } else {
+            FSCom.remove("/resilience.tmp");
+        }
     }
 }
 
