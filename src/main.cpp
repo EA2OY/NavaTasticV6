@@ -715,9 +715,12 @@ void setup()
                              preCheckLastMv);
                     NavaCLIModule::navaSetVivoPending();
                 } else {
-                    // Reserva profunda (< corte-100): arrancar para mandar [Reserva] y volver a
-                    // dormir. Garantiza el apagado canonico de la radio por SPI.
-                    LOG_WARN("Pre-check: bateria %d mV por debajo de corte-100: arranque para [Reserva] y re-sueno",
+                    // Reserva profunda (< corte-100): arrancar para mandar el aviso [Critico] y
+                    // volver a dormir. Garantiza el apagado canonico de la radio por SPI.
+                    // OJO con el nombre: la funcion interna se llama ...ReservaPending(), pero el
+                    // mensaje que SALE POR RADIO es "[Critico]" (ver NavaCLIModule.cpp). Se deja el
+                    // texto real, no el del nombre de la funcion.
+                    LOG_WARN("Pre-check: bateria %d mV por debajo de corte-100: arranque para [Critico] y re-sueno",
                              preCheckLastMv);
                     NavaCLIModule::navaSetReservaPending();
                 }

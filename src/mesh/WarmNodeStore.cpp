@@ -391,10 +391,14 @@ void WarmNodeStore::persistClear()
 {
 #if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
     // NAVARICO-V6 (RAM-only): clear() ya dejo entries[]/pageOf[] a cero - no hay nada que borrar
+    dirty = false;
+#if defined(NRF52840_XXAA)
+    // El estado del anillo de flash es SOLO de nRF52 (ver WarmNodeStore.h): en ESP32 estos
+    // miembros no existen, asi que resetearlos hay que guardarlo o no compila.
     activePage = 0xFF;
     writeSlot = 0;
     nextSeq = 1;
-    dirty = false;
+#endif
 #else
     concurrency::LockGuard g(spiLock);
     flash_nrf5x_flush();
@@ -582,9 +586,8 @@ void WarmNodeStore::load()
 #if defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY
     // NAVARICO-V6 (RAM-only): no se lee /prefs/warm.dat - cada arranque empieza vacio.
     // NOTA: va ANTES del candado a proposito (no hay fichero que abrir y asi no se anida).
-    activePage = 0xFF;
-    writeSlot = 0;
-    nextSeq = 1;
+    // OJO: aqui NO hay estado de anillo que resetear (activePage/writeSlot/nextSeq son miembros
+    // SOLO de nRF52, ver WarmNodeStore.h); en esta implementacion el backend es un fichero.
     dirty = false;
     LOG_INFO("WarmStore: RAM-only (USERPREFS_WARMSTORE_RAM_ONLY), arranca vacio (%s no se lee)", warmFileName);
     return;
