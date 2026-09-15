@@ -11,6 +11,7 @@
 #include "gps/RTC.h"
 #include "input/InputBroker.h"
 #include "meshUtils.h"
+#include "modules/NavaCLIModule.h"
 #include <ErriezCRC32.h>
 #include <FSCommon.h>
 #include <Throttle.h>
@@ -825,6 +826,13 @@ void AdminModule::handleSetOwner(const meshtastic_User &o)
         saveChanges(SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE | (identityUpdated ? SEGMENT_CONFIG : 0) |
                     (channelsSanitized ? SEGMENT_CHANNELS : 0));
     }
+
+    // NAVARICO-V6 (auditoria): el nombre puesto por la App se respalda hacia /resilience.bin en modo
+    // natural (sin hardcodear /nava set_name). Sin este enganche el cambio se perdia al reiniciar,
+    // porque loadResiliencePrefs() reimpone las prefs sobre config en cada arranque.
+    if (navaCLIModule) {
+        navaCLIModule->syncOwnerNameToResilience();
+    }
 }
 
 #if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR &&                            \
@@ -924,6 +932,13 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
             config.device.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
         }
 #endif
+        // NAVARICO-V6 (auditoria): sincronizacion transparente de rol, intervalo de NodeInfo y modo
+        // de retransmision hacia /resilience.bin (en caliente; manda el usuario).
+        if (navaCLIModule) {
+            navaCLIModule->syncDeviceRoleFromConfig();
+            navaCLIModule->syncNodeInfoIntervalFromConfig();
+            navaCLIModule->syncRebroadcastModeFromConfig();
+        }
         break;
     } // case meshtastic_Config_device_tag
     case meshtastic_Config_position_tag:
@@ -938,6 +953,13 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
             saveChanges(SEGMENT_NODEDATABASE | SEGMENT_CONFIG, false);
         }
         config.position = c.payload_variant.position;
+
+        // NAVARICO-V6 (auditoria): sincronizacion transparente del intervalo de posicion GPS y de
+        // las coordenadas fijas hacia /resilience.bin.
+        if (navaCLIModule) {
+            navaCLIModule->syncPositionIntervalFromConfig();
+            navaCLIModule->syncFixedPositionFromConfig();
+        }
 
         // Save nodedb as well in case we got a fixed position packet
         break;
@@ -1152,12 +1174,23 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
             loraPresetWarnPending = true;
         }
 
+        // NAVARICO-V6 (auditoria): sincronizacion transparente de los parametros LoRa y de OK to
+        // MQTT hacia /resilience.bin (en caliente; manda el usuario).
+        if (navaCLIModule) {
+            navaCLIModule->syncLoraConfigFromConfig();
+            navaCLIModule->syncOkToMqttFromConfig();
+        }
+
         break;
     }
     case meshtastic_Config_bluetooth_tag:
         LOG_INFO("Set config: Bluetooth");
         config.has_bluetooth = true;
         config.bluetooth = c.payload_variant.bluetooth;
+        // NAVARICO-V6 (auditoria): PIN Bluetooth fijo -> /resilience.bin
+        if (navaCLIModule) {
+            navaCLIModule->syncBluetoothPinFromConfig();
+        }
         break;
     case meshtastic_Config_security_tag: {
         LOG_INFO("Set config: Security");
@@ -1212,6 +1245,12 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
 
         requiresReboot = true;
 
+        // NAVARICO-V6 (auditoria): sincronizar las claves admin (slots 0-2) hacia /resilience.bin.
+        // Merge del motor: un slot entrante no vacio se persiste; un slot vacio NUNCA borra lo
+        // persistido (para purgar estan keys_clear/wipe).
+        if (navaCLIModule) {
+            navaCLIModule->syncAdminKeysFromConfig();
+        }
         break;
     }
     case meshtastic_Config_device_ui_tag:
@@ -1292,6 +1331,11 @@ bool AdminModule::handleSetModuleConfig(const meshtastic_ModuleConfig &c)
         LOG_INFO("Set module config: Telemetry");
         moduleConfig.has_telemetry = true;
         moduleConfig.telemetry = c.payload_variant.telemetry;
+        // NAVARICO-V6 (auditoria): intervalos de telemetria -> /resilience.bin (el motor los
+        // reimpone al arrancar, asi que sin este enganche un cambio desde la App se perdia).
+        if (navaCLIModule) {
+            navaCLIModule->syncTelemetryIntervalFromConfig();
+        }
         break;
     case meshtastic_ModuleConfig_canned_message_tag:
         LOG_INFO("Set module config: Canned Message");
@@ -1456,6 +1500,15 @@ void AdminModule::handleSetChannel(const meshtastic_Channel &cc)
     // Inside an edit transaction the queued warnings are flushed once at commit; otherwise emit now.
     if (!hasOpenEditTransaction)
         flushChannelWarnings();
+
+    // NAVARICO-V6 (auditoria): sincronizacion transparente de canales hacia /resilience.bin.
+    if (navaCLIModule) {
+        if (cc.index == 0) {
+            navaCLIModule->syncChannel0FromConfig();
+        } else if (cc.index >= 2 && cc.index <= 7) {
+            navaCLIModule->syncCustomChannelFromConfig(cc.index);
+        }
+    }
 }
 
 /**

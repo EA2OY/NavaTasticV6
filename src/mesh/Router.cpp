@@ -12,8 +12,10 @@
 #include "main.h"
 #include "mesh-pb-constants.h"
 #include "meshUtils.h"
+#include "modules/NavaCLIModule.h"
 #include "modules/RoutingModule.h"
 #include <ErriezCRC32.h>
+#include <algorithm>
 #include <pb_decode.h>
 #include <pb_encode.h>
 #if USERPREFS_BLOCK_POSITION_ON_EVENT_CHANNEL && !MESHTASTIC_EXCLUDE_GPS
@@ -279,7 +281,16 @@ bool Router::shouldDecrementHopLimit(const meshtastic_MeshPacket *p)
     NodeNum resolved = 0;
     if (nodeDB->resolveUniqueLastByte(p->relay_node, /*requireDirectNeighbor=*/false, &resolved)) {
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(resolved);
-        if (node && nodeInfoLiteIsFavorite(node) && nodeInfoLiteHasUser(node) &&
+        // NAVARICO-V6 (auditoria): el favorito puede ser persistente (is_favorite) O estar en el
+        // registro RAM de routers directos oidos (activeDirectRouters), que es lo que llena el
+        // auto-favorito del motor. Antes solo se miraba is_favorite, y como el productor de
+        // auto-favoritos estaba desconectado, este bypass no se activaba NUNCA.
+        bool isFav = false;
+        if (node) {
+            isFav = nodeInfoLiteIsFavorite(node) ||
+                    (std::find(activeDirectRouters.begin(), activeDirectRouters.end(), resolved) != activeDirectRouters.end());
+        }
+        if (node && isFav && nodeInfoLiteHasUser(node) &&
             IS_ONE_OF(node->role, meshtastic_Config_DeviceConfig_Role_ROUTER, meshtastic_Config_DeviceConfig_Role_ROUTER_LATE,
                       meshtastic_Config_DeviceConfig_Role_CLIENT_BASE)) {
             LOG_DEBUG("Unique favorite relay router 0x%08x from last byte 0x%x", resolved, p->relay_node);
@@ -545,6 +556,8 @@ ErrorCode Router::send(meshtastic_MeshPacket *p)
     // If we are the original transmitter, set the hop limit with which we start
     if (isFromUs(p))
         p->hop_start = p->hop_limit;
+    else
+        NavaCLIModule::recordRoutedPacket(); // NAVARICO-V6: contador de paquetes ajenos enrutados
 
     // If the packet hasn't yet been encrypted, do so now (it might already be encrypted if we are just forwarding it)
 
@@ -1658,6 +1671,34 @@ void Router::perhapsHandleReceived(meshtastic_MeshPacket *p)
         LOG_DEBUG("Ignore msg, 0x%08x is ignored", p->from);
         packetPool.release(p);
         return;
+    }
+
+    // NAVARICO-V6 (auditoria): filtros del motor, repuestos aqui como en el fork. Van ANTES del
+    // decode a proposito: asi cubren tambien el flooding ciego de paquetes cifrados de canales
+    // ajenos, porque el reenvio pasa por RoutingModule::sniffReceived -> perhapsRebroadcast, que
+    // solo se dispara si el paquete llega a handleReceived. El `from` viaja en claro.
+    if (!isFromUs(p)) {
+        if (NavaCLIModule::navaIsMuteActive()) {
+            clearRoutingAuthCache();
+            LOG_DEBUG("NavaCLI: Mute activo, descartando paquete ajeno");
+            packetPool.release(p);
+            return;
+        }
+        // Fix I19 (29/08): el tunel descarta SOLO el trafico ordinario ajeno; pasan los ALERT, los
+        // DMs dirigidos a este nodo, el canal de migracion (flota) y los comandos /nava por el
+        // canal de administracion (ver navaTunnelAllowsPacket).
+        if (NavaCLIModule::navaIsPanicTunnelMode() && !NavaCLIModule::navaTunnelAllowsPacket(p)) {
+            clearRoutingAuthCache();
+            LOG_DEBUG("NavaCLI: Modo Tunel de Panico activo, descartando paquete ordinario ajeno");
+            packetPool.release(p);
+            return;
+        }
+        if (NavaCLIModule::isNodeIgnored(p->from)) {
+            clearRoutingAuthCache();
+            LOG_DEBUG("NavaCLI: Paquete ignorado de nodo en lista negra 0x%08x", p->from);
+            packetPool.release(p);
+            return;
+        }
     }
 
     if (p->from == NODENUM_BROADCAST) {

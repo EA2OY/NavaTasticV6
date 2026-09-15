@@ -30,6 +30,7 @@
 #include "mesh-pb-constants.h"
 #include "mesh/generated/meshtastic/deviceonly_legacy.pb.h"
 #include "meshUtils.h"
+#include "modules/NavaCLIModule.h"
 #include "modules/NeighborInfoModule.h"
 #include "target_specific.h"
 #if HAS_VARIABLE_HOPS
@@ -3734,6 +3735,10 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
     LOG_DEBUG("Update changed=%d user %s/%s, id=0x%08x, channel=%d", changed, info->long_name, info->short_name, nodeId,
               info->channel);
 
+    // NAVARICO-V6 (auditoria): al aceptar una identidad, evaluar el auto-favorito (admin verificado
+    // o router directo). Va DESPUES de CopyUserToNodeInfoLite, que es quien fija los bits de user.
+    checkAndRegisterRAMAutoFavorite(info);
+
     if (changed) {
         updateGUIforNode = info;
         notifyObservers(true); // Force an update whether or not our node counts have changed
@@ -3845,6 +3850,9 @@ void NodeDB::updateFrom(const meshtastic_MeshPacket &mp)
             info->has_hops_away = true;
             info->hops_away = hopsAway;
         }
+        // NAVARICO-V6 (auditoria): con hops_away ya actualizado, evaluar el auto-favorito. Es aqui
+        // donde se detecta que un router nos llega a 0 saltos (vecino directo).
+        checkAndRegisterRAMAutoFavorite(info);
         sortMeshDB();
     }
 }
@@ -4415,6 +4423,47 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
 bool NodeDB::isAdminNode(const meshtastic_NodeInfoLite &n)
 {
     return (n.bitfield & NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_MASK) != 0;
+}
+
+// NAVARICO-V6 (auditoria): PRODUCTOR del auto-favorito, portado de NavaTastic V5.1. Era la unica
+// funcion que no se habia portado, y sin ella el resto del sistema de auto-favoritos quedaba
+// inerte: Router::activeDirectRouters no lo llenaba nadie (asi que reconcileAutoFavs() iteraba un
+// vector siempre vacio) y el bypass de saltos por favorito no se activaba nunca.
+// Adaptado a la API de 2.8: is_favorite/has_user son BITS del bitfield (nodeInfoLiteSetBit) y los
+// favoritos se marcan con set_favorite(), que respeta el tope de nodos protegidos y ordena la tabla.
+void NodeDB::checkAndRegisterRAMAutoFavorite(meshtastic_NodeInfoLite *info)
+{
+    if (!navaAutoFavoriteEnabled) {
+        return; // Auto-favoriteo desactivado por /nava fav auto off
+    }
+    if (!info || !nodeInfoLiteHasUser(info)) {
+        return;
+    }
+
+    // Nodo verificado como administrador: blindarlo como favorito de inmediato.
+    if (isAdminNode(*info)) {
+        if (!nodeInfoLiteIsFavorite(info)) {
+            LOG_INFO("Auto-Favorite: marcando admin verificado 0x%08x como favorito", info->num);
+            set_favorite(true, info->num);
+        }
+        return;
+    }
+
+    // Router oyendose DIRECTAMENTE (0 saltos): favorito + registro RAM para el bypass de saltos.
+    if (info->has_hops_away && info->hops_away == 0 &&
+        IS_ONE_OF(info->role, meshtastic_Config_DeviceConfig_Role_ROUTER, meshtastic_Config_DeviceConfig_Role_ROUTER_LATE,
+                  meshtastic_Config_DeviceConfig_Role_CLIENT_BASE)) {
+        if (!nodeInfoLiteIsFavorite(info)) {
+            LOG_INFO("Auto-Favorite: marcando router directo 0x%08x como favorito", info->num);
+            set_favorite(true, info->num);
+        }
+        if (router) {
+            auto &adr = router->activeDirectRouters;
+            if (std::find(adr.begin(), adr.end(), info->num) == adr.end()) {
+                adr.push_back(info->num);
+            }
+        }
+    }
 }
 
 // NAVARICO-V6: portado de NavaTastic V5.1. "Huerfano" = favorito del que no se ha oido nada

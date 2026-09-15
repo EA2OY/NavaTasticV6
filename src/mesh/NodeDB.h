@@ -442,6 +442,12 @@ class NodeDB
     /// desaloja), auto-favoritearlo y darle inmunidad a la supresion de NodeInfo.
     bool isAdminNode(const meshtastic_NodeInfoLite &n);
 
+    /// NAVARICO-V6 (auditoria): PRODUCTOR del auto-favorito, portado de NavaTastic V5.1. Marca como
+    /// favorito al admin verificado y a los routers oidos a 0 saltos, y registra a estos ultimos en
+    /// Router::activeDirectRouters (que alimenta reconcileAutoFavs() y el bypass de saltos).
+    /// Se llama al aceptar una identidad (updateUser) y al oir un paquete (updateFrom).
+    void checkAndRegisterRAMAutoFavorite(meshtastic_NodeInfoLite *info);
+
     /// NAVARICO-V6 (portado de NavaTastic V5.1): cuenta los favoritos "huerfanos" (favoritos de los
     /// que no se ha oido nada: last_heard == 0). Sirve para limitar su numero en AdminModule.
     int countOrphanFavorites();
