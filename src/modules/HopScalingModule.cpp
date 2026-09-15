@@ -79,6 +79,11 @@ void HopScalingModule::clear()
 
 void HopScalingModule::saveToDisk() const
 {
+#if defined(USERPREFS_HOPSCALING_RAM_ONLY) && USERPREFS_HOPSCALING_RAM_ONLY
+    // NAVARICO-V6 (auditoria, norma D4): el histograma es dato automatico de malla -> NUNCA a flash.
+    // Se reconstruye solo en RAM con lo que se oye desde el arranque. Sin esta guarda, rollHour()
+    // terminaba en saveToDisk() y el nodo ESCRIBIA FLASH CADA HORA aunque no hubiera trafico.
+#else
 #ifdef FSCom
     FSCom.mkdir("/prefs");
     PersistedHistogram state{};
@@ -100,10 +105,15 @@ void HopScalingModule::saveToDisk() const
                  static_cast<unsigned>(sizeof(state)));
     }
 #endif
+#endif // USERPREFS_HOPSCALING_RAM_ONLY
 }
 
 void HopScalingModule::loadFromDisk()
 {
+#if defined(USERPREFS_HOPSCALING_RAM_ONLY) && USERPREFS_HOPSCALING_RAM_ONLY
+    // RAM-only: no hay nada que cargar (no se persiste). El histograma arranca vacio y se
+    // reconstruye con el trafico que se vaya oyendo.
+#else
 #ifdef FSCom
     concurrency::LockGuard g(spiLock);
     auto file = FSCom.open(HISTOGRAM_STATE_FILE, FILE_O_READ);
@@ -141,6 +151,7 @@ void HopScalingModule::loadFromDisk()
     LOG_INFO("[HOPSCALE] Restored: count=%u samp=1/%u filt=1/%u holdRollsRemaining=%u", count, samplingDenominator,
              filteringDenominator, state.filterDenomHoldRollsRemaining);
 #endif
+#endif // USERPREFS_HOPSCALING_RAM_ONLY
 }
 
 // ---------------------------------------------------------------------------
