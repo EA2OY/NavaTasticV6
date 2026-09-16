@@ -107,7 +107,15 @@ struct ResiliencePrefs {
     int32_t fixed_pos_lon;               // Longitud * 1e7
     int32_t fixed_pos_alt;               // Altitud (metros)
     uint8_t fixed_pos_enabled;           // 1=Posición fija activa
-    uint32_t beacon_interval_secs;       // Intervalo de baliza en segundos
+    // OBSOLETO e INERTE desde el 16/09/2026 (D-10 del traspaso de NavaTastic): su unico escritor era
+    // el comando set_beacon, que se ELIMINO porque escribia el MISMO ajuste que pos_tx_secs y
+    // nodeinfo_tx_secs (dos lineas mas abajo) por un camino aparte. Ya no hay NINGUN comando que lo
+    // cambie y su lectura en loadResiliencePrefs() tambien se elimino, asi que se queda a 0 siempre.
+    // ⚠️ NO BORRAR ESTE CAMPO: quitarlo cambiaria el LAYOUT de ResiliencePrefs y eso invalida el
+    // CRC de /resilience.bin en los nodos ya desplegados -> Clean Slate -> purga de la base de
+    // nodos y reset a linea base. Se conserva como relleno, y a 0. Los nodos que SI usaron
+    // set_beacon tienen aqui un valor distinto de cero: se ignora a proposito.
+    uint32_t beacon_interval_secs;       // OBSOLETO/INERTE: ver nota. NO borrar (cambiaria el layout)
     // NAVARICO F22: Control de difusión periódica de flota y lista negra persistente
     uint32_t pos_tx_secs;                // Difusión de posición (0=OFF, >0 segundos, default: 259200 = 72h)
     uint32_t nodeinfo_tx_secs;           // Difusión de NodeInfo (0=OFF, >0 segundos, default: 259200 = 72h)

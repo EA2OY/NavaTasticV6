@@ -278,10 +278,15 @@ void NavaCLIModule::loadResiliencePrefs() {
         pos.time = getValidTime(RTCQualityFromNet);
         nodeDB->setLocalPosition(pos);
     }
-    if (prefs.beacon_interval_secs > 0) {
-        config.device.node_info_broadcast_secs = prefs.beacon_interval_secs;
-        config.position.position_broadcast_secs = prefs.beacon_interval_secs;
-    }
+    // NAVARICO-V6 (D-10 del traspaso de NavaTastic, 16/09/2026): AQUI ESTABA LA LECTURA DE
+    // prefs.beacon_interval_secs, ELIMINADA. Aplicaba ese valor a node_info_broadcast_secs Y a
+    // position_broadcast_secs, y el comando set_beacon era su UNICO escritor. El comando se ha
+    // eliminado porque escribia el MISMO ajuste que set_nodeinfo_tx y set_pos_tx por un camino
+    // aparte (tres comandos pisandose el mismo par de campos, y ganaba el ultimo en ejecutarse).
+    // Se elimina la lectura para que el campo quede INERTE de verdad.
+    // OJO: el campo sigue en la estructura prefs (ResiliencePrefs) SIN TOCAR EL LAYOUT, para no
+    // forzar migracion ni purgar los nodos ya desplegados. Los nodos que SI usaron set_beacon antes
+    // de esta fecha tienen un valor distinto de cero guardado ahi; a partir de ahora se ignora.
     // NAVARICO NAV9 (28/08): el OFF (0) tambien se restaura si el usuario lo fijo
     // (flag configured) — sobrevive a soft resets y a catastrofes con fichero sano.
     if (prefs.pos_configured) {
@@ -2642,7 +2647,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, usageAndState(topic), true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel,
-                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_lora / set_freq / panic / panic_ok\n[E] set_beacon / mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <comando>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
+                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_lora / set_freq / panic / panic_ok\n[E] mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <comando>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
         }
     }
     else if (cmd == "ping") {
@@ -3518,28 +3523,6 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         startPanic(pulse);
         char respBuf[120];
         snprintf(respBuf, sizeof(respBuf), "OK: PROTOCOLO DE PANICO INICIADO. EVACUACION EN %u MINUTOS...", (unsigned int)mins);
-        enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
-    }
-    else if (cmd.rfind("set_beacon", 0) == 0) {
-        std::string arg = (cmd.length() > 10) ? cmd.substr(10) : "";
-        while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
-        if (arg.empty()) {
-            enqueueResponse(replyDest, replyChannel, usageAndState("set_beacon"), true, false, hops);
-            return;
-        }
-        uint32_t mins = strtoul(arg.c_str(), NULL, 10);
-        if (mins < 1 || mins > 1440) {
-            enqueueResponse(replyDest, replyChannel, "ERR: MINUTOS INVALIDOS (1-1440)", true, false, hops);
-            return;
-        }
-        config.device.node_info_broadcast_secs = mins * 60;
-        config.position.position_broadcast_secs = mins * 60;
-        prefs.beacon_interval_secs = mins * 60;
-        nodeDB->saveToDisk(SEGMENT_CONFIG);
-        saveResiliencePrefs();
-
-        char respBuf[80];
-        snprintf(respBuf, sizeof(respBuf), "OK: BALIZA CONFIGURADA CADA %lu MINUTOS", (unsigned long)mins);
         enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
     }
     else if (cmd.rfind("mute", 0) == 0) {
@@ -4908,8 +4891,6 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
         return "panic: Evacuacion coordinada de emergencia. SOLO DM PKI o canal privado (bloqueado en Navadmin). Uso: /nava panic <preset|sfnarrow> [minutos=10] [rollback_mins=0]";
     else if (topic == "panic_ok")
         return "panic_ok: Consolida el salto de evacuacion cancelando el rollback. SOLO DM PKI o canal privado. Uso: /nava panic_ok";
-    else if (topic == "set_beacon")
-        return "set_beacon: Ajusta cadencia de emision de NodeInfo/Posicion en minutos. Uso: /nava set_beacon [minutos]";
     else if (topic == "mute")
         return "mute: Silencia temporalmente el reenvio de paquetes ajenos (RAM, ventana de 60s antes de actuar). Uso: /nava mute [minutos|off]";
     else if (topic == "set_pin")
@@ -5025,10 +5006,6 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         } else {
             snprintf(buf, sizeof(buf), "POS ACT: SIN FIJAR. USO: set_pos <lat> <lon> [alt]");
         }
-        return buf;
-    }
-    if (topic == "set_beacon") {
-        snprintf(buf, sizeof(buf), "BALIZA ACT: %lu min. USO: set_beacon [minutos]", (unsigned long)(config.device.node_info_broadcast_secs / 60));
         return buf;
     }
     if (topic == "mute") {
