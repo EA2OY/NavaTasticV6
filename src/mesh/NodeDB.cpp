@@ -557,6 +557,18 @@ NodeDB::NodeDB()
     myNodeInfo.reboot_count = preferences.getUInt("rebootCounter", 0);
     preferences.end();
     LOG_DEBUG("Device reboots: %d", myNodeInfo.reboot_count);
+#else
+    // NAVARICO-V6 (decision del operador, 15/09): en las plataformas que NO son ESP32 (nRF52
+    // incluida) NADIE incrementaba myNodeInfo.reboot_count: se quedaba en lo ultimo persistido en
+    // devicestate.my_node.reboot_count (0 en un nodo nuevo). Consecuencia real: toda comprobacion
+    // del tipo "if (myNodeInfo.reboot_count == 1)" (primer arranque o tras reset de fabrica) era
+    // SIEMPRE falsa en nRF52, asi que la posicion fija por defecto (USERPREFS_FIXED_GPS) no se
+    // aplicaba ni despues de un reset de fabrica.
+    // myNodeInfo ES devicestate.my_node, asi que incrementarlo aqui se persiste por el camino
+    // normal de guardado del SEGMENT_DEVICESTATE, sin almacenamiento aparte. Arreglo identico al
+    // de Guillermo; confirmado que el firmware de NavaTastic V5.1 tiene el mismo fallo.
+    myNodeInfo.reboot_count++;
+    LOG_DEBUG("Device reboots: %d", myNodeInfo.reboot_count);
 #endif
 
     // UA_868 is obsolete; migrate to EU_868 before resetRadioConfig() below validates the region.

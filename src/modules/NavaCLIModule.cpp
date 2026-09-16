@@ -347,8 +347,16 @@ void NavaCLIModule::installSurvivalBaseline()
     prefs.version = NAVS_RESILIENCE_VERSION;
 #if defined(USERPREFS_BATTERY_CHEMISTRY_SODIUM)
     prefs.chemistry = 2; // SODIUM
-    prefs.vbat_cutoff = 2600;
-    prefs.vwake_level = 1;
+    // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio B): 2600/1 dejaba el nodo SIN PODER DESPERTAR.
+    // El LPCOMP de nRF52 despierta por flanco de SUBIDA: con corte 2600 mV y umbral de despertar en
+    // el nivel 1 (~2060 mV), al armarse el comparador la bateria YA ESTA POR ENCIMA del umbral, asi
+    // que no hay flanco que la despierte nunca. Y 2600 mV esta ademas al borde del vaciado de una
+    // celda de sodio (su curva OCV baja hasta 2500). Nuevos valores: corte 3000 / nivel 5 (3300 mV).
+    // OJO: hay CUATRO sitios que instalan estos valores (comando, esta linea base, la rama !exists
+    // de navaSetWasInSleep y navaFullResetKeepKeys). Arreglar uno solo deja la combinacion mala
+    // entrando por los otros tres ("blindaje a medias = trampa").
+    prefs.vbat_cutoff = 3000;
+    prefs.vwake_level = 5;
 #else
     prefs.chemistry = 0; // LIPO
     prefs.vbat_cutoff = 3500;
@@ -716,8 +724,10 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
         tmp.role = 0xFF;
         #if defined(USERPREFS_BATTERY_CHEMISTRY_SODIUM)
             tmp.chemistry = 2; // SODIUM
-            tmp.vbat_cutoff = 2600;
-            tmp.vwake_level = 1;
+            // NAVARICO-V6 (cambio B): 3000/5, no 2600/1. Ver el comentario largo en
+            // installSurvivalBaseline(): con 2600/1 el nodo no puede despertar (sin flanco de subida).
+            tmp.vbat_cutoff = 3000;
+            tmp.vwake_level = 5;
         #else
             tmp.chemistry = 0; // LIPO
             tmp.vbat_cutoff = 3500;
@@ -764,13 +774,24 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
     // saveResiliencePrefs: esto corre en el arranque con bateria baja, justo cuando es probable
     // que se corte la alimentacion a mitad de escritura.
     tmp.crc32 = crc32Buffer(&tmp, offsetof(ResiliencePrefs, crc32));
+    // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio F): NO borrar el bueno antes de saber si el
+    // nuevo entra. Antes era remove(bueno) + rename(tmp->bueno) SIN comprobar el retorno: si el
+    // renombrado fallaba tras el borrado, el bueno ya no existia y la unica copia valida quedaba en
+    // el temporal... que el arranque siguiente borra -> Clean Slate -> reset de fabrica.
+    // Ahora se intenta PRIMERO el renombrado sin borrar nada (littlefs 1.6 lo rechaza con
+    // LFS_ERR_EXIST si el destino existe) y SOLO si falla se borra y se reintenta. El retorno se
+    // comprueba en los dos casos.
     File f = FSCom.open("/resilience.tmp", FILE_O_WRITE);
     if (f) {
         size_t written = f.write((const uint8_t *)&tmp, sizeof(tmp));
         f.close();
         if (written == sizeof(tmp)) {
-            FSCom.remove("/resilience.bin");
-            FSCom.rename("/resilience.tmp", "/resilience.bin");
+            if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
+                FSCom.remove("/resilience.bin");
+                if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
+                    LOG_ERROR("NavaCLI: no se pudo sustituir /resilience.bin; se conserva el temporal");
+                }
+            }
         } else {
             FSCom.remove("/resilience.tmp");
         }
@@ -841,6 +862,25 @@ void NavaCLIModule::logEvent(const char *fmt, ...)
 
 bool NavaCLIModule::handleLowBatteryEvent()
 {
+#ifdef ARCH_ESP32
+    // DISENO DELIBERADO - NO ES UN FALLO. NO REPORTAR COMO BUG.
+    //
+    // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio A): en ESP32 esta funcion NO debe tomar el
+    // control. El contrato del gancho es "true = el motor se encarga; false = que siga el flujo
+    // OFICIAL de Meshtastic". Devolviendo true, el motor se hacia cargo y dormia con
+    // doDeepSleep(portMAX_DELAY), y en ESP32 el temporizador de despertar SOLO se arma si el valor
+    // NO es portMAX_DELAY (ver platform/esp32/main-esp32.cpp, cpuDeepSleep): el nodo quedaba
+    // dormido sin temporizador, es decir, solo volvia con el boton fisico.
+    //
+    // El diagnostico correcto NO es "le falta despertador" (eso seria proponer dormir con
+    // temporizador en ESP32, que es LO CONTRARIO de lo decidido): es que **los ESP32 no soportan
+    // el sistema Navarrico de dormir-despertar** y aqui manda el codigo OFICIAL. Ver decisiones
+    // D-1 y D-2 del traspaso.
+    //
+    // NO confundir con Power::shutdown() (apagado A PETICION, boton/App): ese si usa
+    // doDeepSleep(DELAY_FOREVER) en ESP32 y es CORRECTO. El log se parece; el caso no.
+    return false;
+#else
     if (sleepPending) {
         return true;
     }
@@ -861,6 +901,7 @@ bool NavaCLIModule::handleLowBatteryEvent()
         enqueueResponse(NODENUM_BROADCAST, targetChan, buf, true, true);
     }
     return true;
+#endif // ARCH_ESP32
 }
 
 void NavaCLIModule::saveResiliencePrefs() {
@@ -874,8 +915,16 @@ void NavaCLIModule::saveResiliencePrefs() {
         size_t written = f.write((const uint8_t*)&prefs, sizeof(prefs));
         f.close();
         if (written == sizeof(prefs)) {
-            FSCom.remove("/resilience.bin");
-            FSCom.rename("/resilience.tmp", "/resilience.bin");
+            // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio F): intentar el renombrado SIN borrar
+            // primero el bueno; solo si falla (littlefs 1.6 da LFS_ERR_EXIST si el destino existe)
+            // se borra y se reintenta. Y se comprueba el retorno en los dos casos: antes se
+            // ignoraba, y un renombrado fallido tras el borrado dejaba al nodo SIN fichero.
+            if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
+                FSCom.remove("/resilience.bin");
+                if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
+                    LOG_ERROR("NavaCLI: no se pudo sustituir /resilience.bin; se conserva el temporal");
+                }
+            }
         } else {
             FSCom.remove("/resilience.tmp");
         }
@@ -1014,6 +1063,29 @@ void NavaCLIModule::adoptPersistedAdminKeys()
 void NavaCLIModule::applyPersistedAdminKeys()
 {
     meshtastic_Config_SecurityConfig &sec = config.security;
+
+    // NAVARICO-V6 (decision del operador, 15/09): REGLA DE UN SOLO SENTIDO.
+    // Si la CONFIGURACION ya tiene alguna clave de dueno valida, manda ella y este respaldo NO toca
+    // nada. El respaldo entra SOLO para rescatar (configuracion sin claves: reset de fabrica,
+    // flasheo, catastrofe), que es justo cuando no puede haber conflicto.
+    //
+    // Que se gana: borrar una clave desde la App FUNCIONA de verdad (antes el respaldo la resucitaba
+    // en cada arranque) y una clave ya no puede quedar duplicada en dos campos.
+    // Que se pierde A PROPOSITO: restaurar una copia vieja del movil ya no repone las claves buenas
+    // -> el nodo se queda con las viejas. Se nota enseguida (no te obedece) y se arregla volviendo a
+    // poner tu clave desde la App. Se cambia un fallo SILENCIOSO por uno que AVISA.
+    //
+    // OJO: "clave de dueno" excluye las de PROYECTO/fabrica (navaKeyIsProjectKey). Si la config solo
+    // trae la clave del perfil, se considera que NO hay clave de dueno y el respaldo SI rescata: es
+    // el caso del nodo recien flasheado con el perfil puesto, que debe recuperar su respaldo.
+    for (pb_size_t i = 0; i < sec.admin_key_count && i < 3; i++) {
+        if (sec.admin_key[i].size == 32 && navaKeyIsValid(sec.admin_key[i].bytes) &&
+            !navaKeyIsProjectKey(sec.admin_key[i].bytes)) {
+            LOG_INFO("NavaCLI: la configuracion ya tiene clave de dueno; el respaldo NAV9 no la toca");
+            return;
+        }
+    }
+
     bool changed = false;
 
     if (navaKeyIsValid(prefs.keySlot0Own)) {
@@ -1783,8 +1855,9 @@ void NavaCLIModule::navaFullResetKeepKeys()
     prefs.version = NAVS_RESILIENCE_VERSION;
     #if defined(USERPREFS_BATTERY_CHEMISTRY_SODIUM)
         prefs.chemistry = 2;
-        prefs.vbat_cutoff = 2600;
-        prefs.vwake_level = 1;
+        // NAVARICO-V6 (cambio B): 3000/5, no 2600/1. Con 2600/1 el nodo no puede despertar.
+        prefs.vbat_cutoff = 3000;
+        prefs.vwake_level = 5;
     #else
         prefs.chemistry = 0;
         prefs.vbat_cutoff = 3500;
@@ -3764,9 +3837,12 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             prefs.vbat_cutoff = 3400;
             prefs.vwake_level = 3;
         } else if (arg == "sodium") {
+            // NAVARICO-V6 (cambio B): valores nuevos 3000/5. Ver installSurvivalBaseline() para el
+            // porque (con 2600/1 el LPCOMP no tiene flanco de subida y el nodo no despierta nunca).
+            // Van en CUATRO sitios a proposito; este es solo uno.
             prefs.chemistry = 2;
-            prefs.vbat_cutoff = 2600;
-            prefs.vwake_level = 1;
+            prefs.vbat_cutoff = 3000;
+            prefs.vwake_level = 5;
         } else if (arg == "lifepo4") {
 #if defined(SEEED_SOLAR_NODE) || defined(SEEED_XIAO_NRF52840_KIT) || defined(HELTEC_T114)
             enqueueResponse(replyDest, replyChannel, "ERR: LIFEPO4 NO COMPATIBLE, UMBRAL LPCOMP FIJO", true, false, hops);
@@ -3802,6 +3878,29 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, "ERR: RANGO INVALIDO (2400-3600 mV)", true, false, hops);
             return;
         }
+        // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio C): INVARIANTE. El corte tiene que quedar
+        // ESTRICTAMENTE por debajo del umbral de despertar, o el nodo se duerme y no vuelve (el
+        // LPCOMP despierta por flanco de subida: si la bateria ya esta por encima del umbral al
+        // armarse, no hay flanco nunca). set_vwake YA validaba esto; set_vbat no validaba nada, o
+        // sea que la invariante estaba exigida "a medias".
+        //
+        // TRAMPA AL PORTAR (esto se hizo mal primero y hubo que corregirlo): NO comparar contra una
+        // tabla nivel->mV duplicada, porque en las placas de umbral FIJO (Seed/Xiao ~3670 mV, T114
+        // ~4040 mV) el NIVEL SE IGNORA y esa tabla rechazaria cortes fisicamente validos. Se usa el
+        // accesor navaGetLpcompWakeMv(), que ya resuelve las placas fijas.
+        {
+            const uint16_t wakeMv = navaGetLpcompWakeMv();
+            // 100 mV de margen: el mismo que usa la histeresis del comparador.
+            if (wakeMv > 0 && (uint32_t)val + 100 > (uint32_t)wakeMv) {
+                char errBuf[160];
+                snprintf(errBuf, sizeof(errBuf),
+                         "ERR: CORTE %u mV NO VALE: debe quedar por debajo del umbral de despertar (%u mV). "
+                         "Baja el corte, o sube el nivel con set_vwake",
+                         (unsigned)val, (unsigned)wakeMv);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+        }
         prefs.vbat_cutoff = val;
         saveResiliencePrefs();
         power->updateOcvCurve(prefs.vbat_cutoff);
@@ -3823,17 +3922,25 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, "ERR: NIVEL INVALIDO (1-5)", true, false, hops);
             return;
         }
-        uint16_t wakeMv = 0;
-        switch (lvl) {
-            case 1: wakeMv = 2100; break;
-            case 2: wakeMv = 2500; break;
-            case 3: wakeMv = 3700; break;
-            case 4: wakeMv = 4500; break;
-            case 5: wakeMv = 3300; break;
+        // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio C): AQUI HABIA UNA TABLA NIVEL->mV
+        // DUPLICADA, y es un error en las placas de umbral FIJO (Seed/Xiao ~3670 mV, T114
+        // ~4040 mV): en ellas el NIVEL SE IGNORA (getActiveLpcompThreshold() devuelve el umbral de
+        // fabrica y currentWakeLevel no se usa), asi que la tabla comparaba contra un valor que la
+        // placa no aplica y RECHAZABA cortes fisicamente validos. Ademas el mensaje mandaba "sube el
+        // nivel", que en esas placas no habria cambiado nada.
+        // Se usa navaGetLpcompWakeMv(), que es UNICO accesor que ya resuelve las placas fijas.
+        // El nivel se valida aparte (1-5) y se guarda igual: en las de umbral variable si manda.
+        const uint16_t wakeMv = navaGetLpcompWakeMv();
+        if (wakeMv == 0) {
+            enqueueResponse(replyDest, replyChannel, "ERR: ESTA PLACA NO TIENE DESPERTAR POR BATERIA", true, false, hops);
+            return;
         }
         if (wakeMv <= prefs.vbat_cutoff) {
-            char err[100];
-            snprintf(err, sizeof(err), "ERR: VWAKE (%umV) DEBE SUPERAR VBAT_CUTOFF (%umV)", wakeMv, (unsigned int)prefs.vbat_cutoff);
+            char err[160];
+            snprintf(err, sizeof(err),
+                     "ERR: DESPERTAR A %umV NO SUPERA EL CORTE (%umV). Baja el corte con set_vbat, o sube el "
+                     "nivel de despertar",
+                     (unsigned)wakeMv, (unsigned int)prefs.vbat_cutoff);
             enqueueResponse(replyDest, replyChannel, err, true, false, hops);
             return;
         }
@@ -4128,19 +4235,28 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             return;
         }
         int p = atoi(arg.c_str());
+        // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio D): este comando escribia
+        // config.lora.tx_power y guardaba config, pero NUNCA prefs.lora_tx_power. Al arrancar,
+        // applyPersistedLoraConfig() reinyecta ese valor desde /resilience.bin y REVERTIA el cambio:
+        // el comando respondia OK y el ajuste desaparecia al reiniciar. Ahora escribe tambien el
+        // respaldo, igual que ya hacia set_lora. Decision del operador: el comando debe persistir.
 #ifdef NAVARICO_RADIO_E22P
         if (p >= 0 && p <= 12) {
             config.lora.tx_power = p;
+            prefs.lora_tx_power = p;
+            saveResiliencePrefs();
             nodeDB->saveToDisk(SEGMENT_CONFIG);
-            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX E22P APLICADA", true, false, hops);
+            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX E22P APLICADA (Persiste)", true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel, "ERR: POTENCIA INVALIDA E22P (0-12 dBm)", true, false, hops);
         }
 #else
         if (p >= 0 && p <= 22) {
             config.lora.tx_power = p;
+            prefs.lora_tx_power = p;
+            saveResiliencePrefs();
             nodeDB->saveToDisk(SEGMENT_CONFIG);
-            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX SX1262 APLICADA", true, false, hops);
+            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX SX1262 APLICADA (Persiste)", true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel, "ERR: POTENCIA INVALIDA SX1262 (0-22 dBm)", true, false, hops);
         }

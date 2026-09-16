@@ -532,8 +532,23 @@ void nrf52Setup()
     // Set up nrfx watchdog. Do not enable the watchdog yet (we do that
     // the first time through the main loop), so that other threads can
     // allocate their own wdt channel to protect themselves from hangs.
+    //
+    // NAVARICO-V6 (decision del operador, 15/09): RUN_SLEEP en vez de PAUSE_SLEEP_HALT. Con
+    // PAUSE_SLEEP_HALT el contador se PAUSA mientras el nodo duerme, asi que un cuelgue ocurrido
+    // durante el sueno no lo reiniciaba nadie (solo se recuperaba con el boton fisico). El motivo
+    // es el mismo que perseguia Guillermo: hay rutas que toman spiLock con xSemaphoreTake(...,
+    // portMAX_DELAY), SIN timeout, asi que si la radio se queda el candado el hilo de loop() se
+    // bloquea para siempre.
+    //
+    // POR QUE ES SEGURO EN NUESTRAS PLACAS (verificado antes de cambiarlo): la unica rama del
+    // firmware que hace un delay() largo SIN alimentar el watchdog es el "sleepy tracker" de
+    // cpuDeepSleep(), y exige a la vez rol TRACKER/TAK_TRACKER/SENSOR **y** config.power.
+    // is_power_saving == true, que solo se activa bajo #if defined(USE_POWERSAVE). Ninguna de
+    // nuestras placas define USE_POWERSAVE, asi que esa rama es inalcanzable. El camino normal
+    // (msecToWake == portMAX_DELAY) llama a sd_power_system_off(), y en System OFF el watchdog
+    // esta apagado porque lo esta el chip entero: no hay reinicios falsos posibles al dormir.
     nrfx_wdt_config_t wdt0_config = {
-        .behaviour = NRF_WDT_BEHAVIOUR_PAUSE_SLEEP_HALT, .reload_value = APP_WATCHDOG_SECS * 1000,
+        .behaviour = NRF_WDT_BEHAVIOUR_RUN_SLEEP, .reload_value = APP_WATCHDOG_SECS * 1000,
         // Note: Not using wdt interrupts.
         // .interrupt_priority = NRFX_WDT_DEFAULT_CONFIG_IRQ_PRIORITY
     };
