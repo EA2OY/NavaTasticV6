@@ -492,6 +492,18 @@ void nrf52Setup()
     pinMode(ADC_V, INPUT);
 #endif
 
+    // NAVARICO-V6 (23/09, portado de NavaTastic V5.3): ALIMENTACION DE LA RADIO.
+    // En la placa Xiao con modulo E22P, D5 no es el RXEN del SX1262: es el pin que DA DE COMER al
+    // modulo. Si no se pone en ALTO aqui, la radio no se enciende y el nodo arranca MUDO (compila
+    // bien y no funciona en hardware). Es la primera cosa que se hace en setup() a proposito, para
+    // que la radio tenga alimentacion antes de inicializarse.
+    // Solo se define en la variante que lo necesita (RADIO_POWER_ENABLE_PIN), asi que en el resto de
+    // placas este bloque NO existe: no toca nada de las demas.
+#ifdef RADIO_POWER_ENABLE_PIN
+    pinMode(RADIO_POWER_ENABLE_PIN, OUTPUT);
+    digitalWrite(RADIO_POWER_ENABLE_PIN, HIGH);
+#endif
+
     // The Adafruit core's init() (cores/nRF5/wiring.c) caches RESETREAS into a static and then
     // W1C-clears the hardware register before setup() ever runs, so a raw NRF_POWER->RESETREAS
     // read here is ALWAYS 0. Use the core's cached copy so this log line is actually meaningful

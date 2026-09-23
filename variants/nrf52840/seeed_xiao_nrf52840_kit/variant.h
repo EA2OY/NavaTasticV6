@@ -146,7 +146,19 @@ static const uint8_t A5 = PIN_A5;
 #define SX126X_DIO1 D1
 #define SX126X_BUSY D3
 #define SX126X_RESET D2
+// NAVARICO-V6 (23/09): EJE RADIO, portado de NavaTastic V5.3.
+//   Env navarrico_xiao_kit_sx1262_* = radio original de Seeed (SX1262): D5 = RXEN.
+//   Env navarrico_xiao_e22p_*      = modulo E22P: D5 pasa a ser la ALIMENTACION de la radio
+//                                    (RXEN sin usar) y hay que ponerlo en ALTO en el arranque
+//                                    o la radio NO SE ENCIENDE.
+// Sin este bloque, el env del Xiao con E22P compilaba pero la radio no recibia alimentacion:
+// funcionaba en la compilacion y no en hardware. El encendido lo hace nrf52Setup().
+#ifdef NAVARICO_RADIO_E22P
+#define SX126X_RXEN RADIOLIB_NC
+#define RADIO_POWER_ENABLE_PIN D5
+#else
 #define SX126X_RXEN D5
+#endif
 #endif // defined(SEEED_XIAO_NRF_WIO_BTB)
 #endif // defined(XIAO_BLE_LEGACY_PINOUT)
 
