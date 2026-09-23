@@ -581,7 +581,14 @@ int32_t PositionModule::runOnce()
     uint32_t effectiveIntervalMs =
         effectiveBroadcastIntervalMs(intervalMs, stationary, (uint32_t)default_position_stationary_broadcast_secs * 1000UL);
 
-    if (lastGpsSend == 0 || msSinceLastSend >= effectiveIntervalMs) {
+    // V5.3 (bloque 4): APAGADO de verdad. Con position_broadcast_secs a 0 el nodo NO emite posicion
+    // por radio. Sin esta puerta, el 0 se sustituia por el valor de fabrica en
+    // getConfiguredOrDefaultMsScaled y el nodo seguia emitiendo con la cadencia por defecto: los
+    // comandos prometian "off" y no apagaban nada. Cubre los DOS caminos automaticos de este modulo
+    // (la rama periodica y la "inteligente" por movimiento, que viene activada de fabrica).
+    bool posPeriodicaOff = (config.position.position_broadcast_secs == 0);
+
+    if (!posPeriodicaOff && (lastGpsSend == 0 || msSinceLastSend >= effectiveIntervalMs)) {
         if (waitingForFreshPosition) {
             LOG_DEBUG_GPS("Skip initial position send; no fresh position since boot");
         } else if (nodeDB->hasValidPosition(node)) {
@@ -600,7 +607,7 @@ int32_t PositionModule::runOnce()
                 sendLostAndFoundText();
             }
         }
-    } else if (config.position.position_broadcast_smart_enabled) {
+    } else if (!posPeriodicaOff && config.position.position_broadcast_smart_enabled) {
         const meshtastic_NodeInfoLite *node2 = service->refreshLocalMeshNode(); // should guarantee there is now a position
 
         if (nodeDB->hasValidPosition(node2)) {
@@ -709,6 +716,13 @@ struct SmartPosition PositionModule::getDistanceTraveledSinceLastSend(meshtastic
 
 void PositionModule::handleNewPosition()
 {
+    // V5.3 (bloque 4): con la posicion apagada (position_broadcast_secs == 0) tampoco se emite por
+    // movimiento. Este es el TERCER camino automatico y el mas escondido: lo dispara el GPS al recibir
+    // una posicion nueva (GPS.cpp), no el reloj del modulo, asi que las otras dos puertas no lo cubrian.
+    // Volver a encenderla (poniendo un intervalo) lo reactiva.
+    if (config.position.position_broadcast_secs == 0)
+        return;
+
     const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
     const meshtastic_NodeInfoLite *node2 = service->refreshLocalMeshNode(); // should guarantee there is now a position
     // We limit our GPS broadcasts to a max rate

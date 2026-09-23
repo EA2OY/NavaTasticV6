@@ -81,7 +81,7 @@ int32_t HealthTelemetryModule::runOnce()
                                                                                    default_telemetry_broadcast_interval_secs,
                                                                                    numOnlineNodes, TrafficType::TELEMETRY))) &&
             airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
-            airTime->isTxAllowedAirUtil()) {
+            moduleConfig.telemetry.health_update_interval != 0 && airTime->isTxAllowedAirUtil()) {
             sendTelemetry();
             if (transmitHistory)
                 transmitHistory->setLastSentToMesh(TX_HISTORY_KEY_HEALTH_TELEMETRY);

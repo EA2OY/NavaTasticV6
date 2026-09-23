@@ -1690,7 +1690,14 @@ void NodeDB::installRoleDefaults(meshtastic_Config_DeviceConfig_Role role)
 
 void NodeDB::initModuleConfigIntervals()
 {
-    // Zero out telemetry intervals so that they coalesce to defaults in Default.h
+    // V5.3 (bloque 4): los cuatro intervalos de telemetria se ponen EXPLICITOS con el valor de fabrica
+    // de NavaTastic (12 h = 43200 s). Antes se dejaban a cero con el comentario "ya se convertiran en el
+    // defecto", pero desde este arreglo el 0 significa APAGADO: dejarlos a 0 haria que un nodo recien
+    // flasheado o recien borrado NO emitiese nunca ambiente, aire, energia ni salud.
+    // OJO CON LA MACRO: en 2.8 `default_telemetry_broadcast_interval_secs` vale IF_ROUTER(ONE_DAY/2,
+    // 60*60) = 1 HORA, no 12. El 12 h de NavaTastic se escribe aqui como literal, que es ademas lo que
+    // usa el propio motor (/nava set_telem_tx on, NavaCLIModule.cpp) y lo que promete su ayuda.
+    // device_update_interval NO entra: se queda en MAX_INTERVAL (su 0 nunca significo apagado).
 #ifdef USERPREFS_CONFIG_DEVICE_TELEM_UPDATE_INTERVAL
     moduleConfig.telemetry.device_update_interval = USERPREFS_CONFIG_DEVICE_TELEM_UPDATE_INTERVAL;
 #else
@@ -1704,7 +1711,7 @@ void NodeDB::initModuleConfigIntervals()
 #ifdef USERPREFS_CONFIG_ENV_TELEM_UPDATE_INTERVAL
     moduleConfig.telemetry.environment_update_interval = USERPREFS_CONFIG_ENV_TELEM_UPDATE_INTERVAL;
 #else
-    moduleConfig.telemetry.environment_update_interval = 0;
+    moduleConfig.telemetry.environment_update_interval = 43200;
 #endif
 
 #ifdef USERPREFS_CONFIG_ENV_SCREEN_SCREEN_ENABLED
@@ -1714,7 +1721,7 @@ void NodeDB::initModuleConfigIntervals()
 #ifdef USERPREFS_CONFIG_AQ_TELEM_UPDATE_INTERVAL
     moduleConfig.telemetry.air_quality_interval = USERPREFS_CONFIG_AQ_TELEM_UPDATE_INTERVAL;
 #else
-    moduleConfig.telemetry.air_quality_interval = 0;
+    moduleConfig.telemetry.air_quality_interval = 43200;
 #endif
 
 #ifdef USERPREFS_CONFIG_AQ_MEASUREMENT_ENABLED
@@ -1725,8 +1732,8 @@ void NodeDB::initModuleConfigIntervals()
     moduleConfig.telemetry.air_quality_screen_enabled = USERPREFS_CONFIG_AQ_SCREEN_ENABLED;
 #endif
 
-    moduleConfig.telemetry.power_update_interval = 0;
-    moduleConfig.telemetry.health_update_interval = 0;
+    moduleConfig.telemetry.power_update_interval = 43200;
+    moduleConfig.telemetry.health_update_interval = 43200;
     moduleConfig.neighbor_info.update_interval = 0;
     moduleConfig.paxcounter.paxcounter_update_interval = 0;
 }
@@ -2855,14 +2862,20 @@ void NodeDB::loadFromDisk()
     if (moduleConfig.version < 23) {
         LOG_DEBUG("ModuleConfig v%d stale, upgrade to new default intervals", moduleConfig.version);
         moduleConfig.version = DEVICESTATE_CUR_VER;
+        // V5.3 (bloque 4): el 900 de las configuraciones antiguas se traducia a 0, que "luego se
+        // convertia en el defecto". Desde este arreglo el 0 es APAGADO, asi que se traduce al defecto
+        // EXPLICITO (12 h). Se anade ademas la clausula de salud, que no existia y se quedaba en 900.
+        // Los dos ultimos (vecinos y contador de personas) NO usan el 0 como apagado: se quedan igual.
         if (moduleConfig.telemetry.device_update_interval == 900)
-            moduleConfig.telemetry.device_update_interval = 0;
+            moduleConfig.telemetry.device_update_interval = 43200;
         if (moduleConfig.telemetry.environment_update_interval == 900)
-            moduleConfig.telemetry.environment_update_interval = 0;
+            moduleConfig.telemetry.environment_update_interval = 43200;
         if (moduleConfig.telemetry.air_quality_interval == 900)
-            moduleConfig.telemetry.air_quality_interval = 0;
+            moduleConfig.telemetry.air_quality_interval = 43200;
         if (moduleConfig.telemetry.power_update_interval == 900)
-            moduleConfig.telemetry.power_update_interval = 0;
+            moduleConfig.telemetry.power_update_interval = 43200;
+        if (moduleConfig.telemetry.health_update_interval == 900)
+            moduleConfig.telemetry.health_update_interval = 43200;
         if (moduleConfig.neighbor_info.update_interval == 900)
             moduleConfig.neighbor_info.update_interval = 0;
         if (moduleConfig.paxcounter.paxcounter_update_interval == 900)

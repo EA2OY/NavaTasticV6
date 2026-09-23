@@ -96,7 +96,7 @@ int32_t PowerTelemetryModule::runOnce()
 
         uint32_t lastTelemetry = transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_POWER_TELEMETRY) : 0;
         if (((lastTelemetry == 0) || !Throttle::isWithinTimespanMs(lastTelemetry, sendToMeshIntervalMs)) &&
-            airTime->isTxAllowedAirUtil()) {
+            moduleConfig.telemetry.power_update_interval != 0 && airTime->isTxAllowedAirUtil()) {
             sendTelemetry();
             if (transmitHistory)
                 transmitHistory->setLastSentToMesh(TX_HISTORY_KEY_POWER_TELEMETRY);

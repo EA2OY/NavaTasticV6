@@ -229,7 +229,11 @@ int32_t AirQualityTelemetryModule::runOnce()
         bool telemetryDue = (lastTelemetry == 0) || !Throttle::isWithinTimespanMs(lastTelemetry, telemetryIntervalMs);
         bool phoneDue = (lastSentToPhone == 0) || !Throttle::isWithinTimespanMs(lastSentToPhone, sendToPhoneIntervalMs);
 
-        if (telemetryDue && telemetryAllowed) {
+        // V5.3 (bloque 4): 0 = telemetria apagada a proposito (/nava set_telem_tx off): no se emite por
+        // radio. La guardia va AQUI y NO dentro de telemetryDue: esa variable tambien gobierna el
+        // despertar de los sensores (linea 201), y con el 0 los sensores deben seguir despertando; lo
+        // que no debe salir es la emision. El envio al telefono del else if de mas abajo no se toca.
+        if (telemetryDue && telemetryAllowed && moduleConfig.telemetry.air_quality_interval != 0) {
             if (sendTelemetry()) {
                 if (transmitHistory) {
                     transmitHistory->setLastSentToMesh(TX_HISTORY_KEY_AIR_QUALITY_TELEMETRY);

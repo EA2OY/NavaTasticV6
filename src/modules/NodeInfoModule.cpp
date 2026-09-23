@@ -229,9 +229,17 @@ int32_t NodeInfoModule::runOnce()
     bool requestReplies = currentGeneration != radioGeneration;
     currentGeneration = radioGeneration;
 
+    uint32_t intervalMs =
+        Default::getConfiguredOrDefaultMs(config.device.node_info_broadcast_secs, default_node_info_broadcast_secs);
+    // V5.3 (bloque 4): el 0 fijado por el usuario (/nava set_nodeinfo_tx off) es una orden explicita: se
+    // respeta y NO se sustituye por el valor de fabrica. El modulo sigue despertando a ese ritmo, pero
+    // sale sin emitir (si se devolviera sin mas, el hilo se redispararia cada 5 s).
+    if (config.device.node_info_broadcast_secs == 0)
+        return intervalMs;
+
     if (airTime->isTxAllowedAirUtil() && config.device.role != meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN) {
         LOG_INFO("Send our nodeinfo to mesh (wantReplies=%d)", requestReplies);
         sendOurNodeInfo(NODENUM_BROADCAST, requestReplies); // Send our info (don't request replies)
     }
-    return Default::getConfiguredOrDefaultMs(config.device.node_info_broadcast_secs, default_node_info_broadcast_secs);
+    return intervalMs;
 }
