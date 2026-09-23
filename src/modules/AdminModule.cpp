@@ -911,8 +911,19 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
             nodeDB->installRoleDefaults(c.payload_variant.device.role);
             changes |= SEGMENT_NODEDATABASE | SEGMENT_DEVICESTATE; // Some role defaults affect owner
         }
-        if (config.device.node_info_broadcast_secs < min_node_info_broadcast_secs) {
-            LOG_DEBUG("node_info_broadcast_secs too low, set to %d", min_node_info_broadcast_secs);
+        // V5.3 (H17b): el 0 que fija el usuario es una orden EXPLICITA de apagar el anuncio periodico, y
+        // NO se puede subir al minimo: sin esta excepcion, apagar NodeInfo desde la App era imposible
+        // (el nodo lo volvia a encender solo). El firmware solo pone tope MAXIMO a este ajuste, no minimo.
+        // Se avisa en el registro, porque apagar esto deja al nodo SIN ANUNCIARSE en la malla: los demas
+        // no sabran que existe hasta que lo oigan por otro trafico.
+        // Es el enganche que necesita el bloque 4: sin el, el apagado de presencia solo era alcanzable
+        // por /nava set_nodeinfo_tx off.
+        if (config.device.node_info_broadcast_secs == 0) {
+            LOG_WARN("NodeInfo broadcast APAGADO (0) por peticion del usuario: el nodo no se anunciara "
+                     "en la malla. Para volver a activarlo, pon un valor >= %d segundos.",
+                     min_node_info_broadcast_secs);
+        } else if (config.device.node_info_broadcast_secs < min_node_info_broadcast_secs) {
+            LOG_DEBUG("Tried to set node_info_broadcast_secs too low, setting to %d", min_node_info_broadcast_secs);
             config.device.node_info_broadcast_secs = min_node_info_broadcast_secs;
         }
         // Router Client and Repeater deprecated; Set it to client

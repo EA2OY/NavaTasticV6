@@ -16,6 +16,7 @@
 #include "mesh/RadioLibInterface.h"
 #include "buzz/buzz.h"
 #include "Channels.h"
+#include "DisplayFormatters.h"
 #include "RTC.h"
 #include "../mesh/generated/meshtastic/apponly.pb.h"
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
@@ -462,6 +463,26 @@ void NavaCLIModule::ensureNavadminChannel()
     
     // Si el Slot 1 ya es Navadmin, no hay nada que hacer
     if (ch1.has_settings && ch1.role == meshtastic_Channel_Role_SECONDARY && strcmp(ch1.settings.name, "Navadmin") == 0) {
+        // V5.3 (arreglo 7): el NOMBRE y el PAPEL no bastan. Si alguien le ha cambiado la CLAVE desde la
+        // app manteniendo el nombre, el canal deja de ser de rescate EN SILENCIO: el nodo no lo detecta, y
+        // el respaldo tampoco lo arregla porque el slot 1 NO forma parte de /resilience.bin. Hay un
+        // agravante: como la HUELLA del canal depende del nombre Y de la clave, con otra clave el nodo
+        // DEJA DE DESCIFRAR ese canal, asi que ni siquiera oiria a quien intentara rescatarlo.
+        if (!(ch1.settings.psk.size == 1 && ch1.settings.psk.bytes[0] == 0x01)) {
+            // En modo radioaficionado (licencia) los canales van EN TEXTO CLARO a proposito, asi que NO se
+            // repone la clave publica: si se repusiera, el rescate volveria a quedar cifrado en cada
+            // arranque de un modo que debe ir sin cifrar. Se mira QUIEN es el nodo antes de tocar la clave.
+            if (owner.is_licensed) return;
+            LOG_WARN("NavaCLI: el canal Navadmin (slot 1) tenia una clave distinta de la publica: restaurandola");
+            logEvent("NAVADMIN CLAVE RESTAURADA");
+            // Se limpia el resto del bufer: la clave vieja no debe quedarse en RAM detras de la nueva.
+            memset(ch1.settings.psk.bytes, 0, sizeof(ch1.settings.psk.bytes));
+            ch1.settings.psk.size = 1;
+            ch1.settings.psk.bytes[0] = 0x01;
+            channels.setChannel(ch1);
+            channels.onConfigChanged();
+            nodeDB->saveToDisk(SEGMENT_CHANNELS);
+        }
         return;
     }
 
@@ -1868,26 +1889,37 @@ bool NavaCLIModule::navaIsPanicTunnelMode()
     return (navaCLIModule && (navaCLIModule->prefs.panic_active != 0 || navaCLIModule->prefs.panic_trial_active != 0));
 }
 
-// Fix I19 (29/08): el modo tunel solo debe descartar el trafico ordinario ajeno. Pasan:
-// 1) cualquier paquete ALERT (pulsos PANC/POK! e instrucciones urgentes);
-// 2) los mensajes dirigidos A ESTE nodo (DMs del admin -> panic_ok textual operable);
-// 3) todo lo que llegue por el canal de migracion (slot CLI de flota >= 2: pulsos,
-//    instrucciones preparatorias y funciones futuras del canal) -> se acepta o se repite;
-// 4) los comandos /nava por el canal de administracion (Navadmin o el canal CLI).
+// Modo tunel del panico: solo debe descartar el trafico ORDINARIO ajeno. Pasan:
+// 1) los mensajes dirigidos A ESTE nodo (DMs del admin -> panic_ok textual operable);
+// 2) todo lo que llegue por el canal de migracion (slot CLI de flota >= 2), que son los pulsos y las
+//    instrucciones preparatorias. OJO: por RADIO el paquete aun NO esta descifrado y en ese punto
+//    p->channel es la HUELLA del canal, NO su indice (el indice se resuelve al descifrar, mas tarde);
+//    por MQTT o simulador si llega ya descifrado y ahi p->channel SI es el indice. Hay que cubrir los
+//    dos casos: comparar siempre con el indice dejaba esta regla MUERTA en el camino de radio.
+//    NO entra el canal 1 publico;
+// 3) los comandos /nava, SOLO cuando el paquete llega ya descifrado: ahi si se puede mirar su contenido,
+//    y se admiten por el canal 1 o por el canal de consola.
+// V5.3: se ha RETIRADO la regla de "cualquier paquete ALERT", que no podia cumplirse NUNCA porque la
+// prioridad no viaja en los paquetes recibidos por radio. Los pulsos del panico entran por la regla 2.
 bool NavaCLIModule::navaTunnelAllowsPacket(const meshtastic_MeshPacket *p)
 {
     if (p == nullptr) return false;
-    if (p->priority == meshtastic_MeshPacket_Priority_ALERT) return true;
     if (p->to != NODENUM_BROADCAST && p->to == nodeDB->getNodeNum()) return true;
     if (navaCLIModule) {
         uint8_t cliSlot = navaCLIModule->prefs.cliChannelSlot;
         if (cliSlot < 1 || cliSlot > 7) cliSlot = 1;
-        if (cliSlot >= 2 && p->channel == cliSlot) return true;
-        // El resto solo aplica a paquetes ya decodificados (el tunel corre antes del decode)
-        if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
-            (p->channel == 1 || p->channel == cliSlot) && p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP &&
-            p->decoded.payload.size >= 5 && memcmp(p->decoded.payload.bytes, "/nava", 5) == 0) {
-            return true;
+        if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
+            // Paquete YA descifrado (asi llega el trafico que baja por MQTT): p->channel es el INDICE.
+            if (cliSlot >= 2 && p->channel == cliSlot) return true;
+            if ((p->channel == 1 || p->channel == cliSlot) && p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP &&
+                p->decoded.payload.size >= 5 && memcmp(p->decoded.payload.bytes, "/nava", 5) == 0) {
+                return true;
+            }
+        } else {
+            // Paquete SIN descifrar (camino de radio): p->channel es la HUELLA del canal, no su indice.
+            // Antes se comparaba con el indice y esta excepcion no funcionaba nunca.
+            int16_t huella = channels.getHash(cliSlot);
+            if (cliSlot >= 2 && huella >= 0 && p->channel == (uint8_t)huella) return true;
         }
     }
     return false;
@@ -2400,6 +2432,152 @@ std::string NavaCLIModule::generateChannelUrl(uint8_t channelIndex)
     return "https://meshtastic.org/e/#" + b64;
 }
 
+// V5.3 (bloque 5): parte comun de los dos generadores de enlace (protobuf + base64 urlsafe SIN relleno:
+// es el formato que lee meshtastic.org y el firmware).
+std::string NavaCLIModule::channelSetToUrl(const meshtastic_ChannelSet &cs)
+{
+    uint8_t buffer[MESHTASTIC_MESHTASTIC_APPONLY_PB_H_MAX_SIZE];
+    pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+    if (!pb_encode(&stream, &meshtastic_ChannelSet_msg, &cs)) {
+        return "ERR: FALLO ENCODING PROTOBUF";
+    }
+
+    static const char b64url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    std::string b64;
+    size_t len = stream.bytes_written;
+    b64.reserve(((len + 2) / 3) * 4);
+    size_t i = 0;
+    while (i + 3 <= len) {
+        uint32_t n = (buffer[i] << 16) | (buffer[i + 1] << 8) | buffer[i + 2];
+        b64 += b64url[(n >> 18) & 63];
+        b64 += b64url[(n >> 12) & 63];
+        b64 += b64url[(n >> 6) & 63];
+        b64 += b64url[n & 63];
+        i += 3;
+    }
+    if (i + 1 == len) {
+        uint32_t n = buffer[i] << 16;
+        b64 += b64url[(n >> 18) & 63];
+        b64 += b64url[(n >> 12) & 63];
+    } else if (i + 2 == len) {
+        uint32_t n = (buffer[i] << 16) | (buffer[i + 1] << 8);
+        b64 += b64url[(n >> 18) & 63];
+        b64 += b64url[(n >> 12) & 63];
+        b64 += b64url[(n >> 6) & 63];
+    }
+
+    return "https://meshtastic.org/e/#" + b64;
+}
+
+// V5.3 (bloque 5): el "espejo" del nodo: TODOS los huecos (los vacios se dejan en blanco, para que la
+// POSICION de cada canal sea inequivoca al aplicarlo) mas la configuracion de radio. Es lo que aplica
+// set_url, asi que un nodo recien flasheado se puede clonar con esto.
+std::string NavaCLIModule::generateFullChannelUrl()
+{
+    meshtastic_ChannelSet cs = meshtastic_ChannelSet_init_zero;
+    cs.settings_count = (pb_size_t)MAX_NUM_CHANNELS;
+    for (uint8_t i = 0; i < (uint8_t)MAX_NUM_CHANNELS; i++) {
+        const meshtastic_Channel &ch = channels.getByIndex(i);
+        // Solo se espeja un canal que el camino de vuelta reconoceria como puesto (nombre o clave); si
+        // no, el espejo incluia un hueco que set_url rechazaria por "vacio".
+        if (ch.has_settings && ch.role != meshtastic_Channel_Role_DISABLED &&
+            (ch.settings.name[0] != '\0' || ch.settings.psk.size > 0)) {
+            cs.settings[i] = ch.settings;
+        }
+    }
+    cs.has_lora_config = true;
+    cs.lora_config = config.lora;
+    return channelSetToUrl(cs);
+}
+
+// ============================================================================================
+// V5.3 (bloque 5): AYUDANTES DE SEGURIDAD DEL ENLACE DE CANALES (set_url)
+// --------------------------------------------------------------------------------------------
+// Puertas que impiden que un enlace deje la red ABIERTA de verdad, disfrazada de red privada. No
+// bloquean "todo lo que no me gusta": solo lo que quita el cifrado. La clave publica de fabrica NO se
+// bloquea (decision del operador, 19/09): los 16 perfiles de la flota la llevan de fabrica en el canal
+// 0 y en el 1, asi que bloquearla dejaria el espejo de un nodo recien flasheado sin poder aplicarse.
+// Se AVISA, que es lo acordado.
+// ============================================================================================
+
+// La clave PUBLICA de fabrica (la que trae cualquier nodo recien salido de la caja). Llega como alias
+// de un byte (el 1) o como los 16 bytes del llavero conocido: las dos formas son la MISMA clave.
+static bool navaClaveEsPublica(const meshtastic_ChannelSettings &s)
+{
+    if (s.psk.size == 1)
+        return s.psk.bytes[0] == 1;
+    if (s.psk.size == sizeof(defaultpsk))
+        return memcmp(s.psk.bytes, defaultpsk, sizeof(defaultpsk)) == 0;
+    return false;
+}
+
+// Nombre normalizado (sin guiones bajos, guiones ni espacios, en minusculas) para que "LONG_FAST",
+// "LongFast" y "Long Fast" cuenten como el mismo nombre de preset.
+static void navaNormNombre(const char *in, char *out, size_t outLen)
+{
+    size_t j = 0;
+    for (size_t i = 0; in[i] != '\0' && j + 1 < outLen; i++) {
+        if (in[i] == '_' || in[i] == ' ' || in[i] == '-')
+            continue;
+        out[j++] = (char)tolower((unsigned char)in[i]);
+    }
+    out[j] = '\0';
+}
+
+// Nombre de preset estandar (el que la app pone sola a un canal normal) o "Custom".
+static bool navaNombreEsDePreset(const char *n)
+{
+    char objetivo[20];
+    navaNormNombre(n, objetivo, sizeof(objetivo));
+    if (strcmp(objetivo, "custom") == 0)
+        return true;
+    for (int p = _meshtastic_Config_LoRaConfig_ModemPreset_MIN; p <= _meshtastic_Config_LoRaConfig_ModemPreset_MAX; p++) {
+        const char *dn = DisplayFormatters::getModemPresetDisplayName((meshtastic_Config_LoRaConfig_ModemPreset)p, false, true);
+        if (dn == nullptr)
+            continue;
+        char cand[20];
+        navaNormNombre(dn, cand, sizeof(cand));
+        if (strcmp(cand, "invalid") == 0)
+            continue;
+        if (strcmp(cand, objetivo) == 0)
+            return true;
+    }
+    // Dos presets del protocolo NO tienen nombre en la tabla de nombres (devuelve "Invalid"), asi que se
+    // cubren a mano: VERY_LONG_SLOW y NARROW_SLOW. Los demas ya salen del bucle de arriba.
+    static const char *nombresSueltos[] = {"verylongslow", "narrowslow"};
+    for (const char *cand : nombresSueltos) {
+        if (strcmp(cand, objetivo) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Un canal es el PUBLICO de Meshtastic si lleva la clave de fabrica y ademas no tiene nombre propio (el
+// firmware le pone el del preset) o lo tiene de preset / "Custom". Esa combinacion es una red abierta
+// con pinta de red privada, y la regla de nombres del enlace la prohibe.
+static bool navaCanalEsPublico(const meshtastic_ChannelSettings &s)
+{
+    if (!navaClaveEsPublica(s))
+        return false;
+    if (s.name[0] == '\0')
+        return true;
+    return navaNombreEsDePreset(s.name);
+}
+
+// Clave apagada "de verdad": el alias 0 significa SIN CIFRAR (y NO hereda la clave del canal principal,
+// al contrario que un hueco sin clave propia), asi que deja el canal abierto.
+static bool navaClaveSinCifrar(const meshtastic_ChannelSettings &s)
+{
+    return (s.psk.size == 1 && s.psk.bytes[0] == 0);
+}
+
+// Clave apagada en un canal que debe ir cifrado por su cuenta: sin clave, o con el alias de "sin
+// cifrar". Es la puerta del canal principal.
+static bool navaClaveApagada(const meshtastic_ChannelSettings &s)
+{
+    return (s.psk.size == 0 || navaClaveSinCifrar(s));
+}
+
 bool NavaCLIModule::wantPacket(const meshtastic_MeshPacket *p)
 {
     if (p != nullptr) {
@@ -2844,8 +3022,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                                   cmd == "wipe" ||
                                   cmd == "keys_clear" ||
                                   cmd.rfind("set_preset", 0) == 0 ||
-                                  cmd.rfind("set_lora", 0) == 0 ||
-                                  cmd.rfind("set_freq", 0) == 0 ||
+                                  cmd.rfind("set_url", 0) == 0 ||
                                   cmd.rfind("set_txpower", 0) == 0 ||
                                   cmd.rfind("set_chem", 0) == 0 ||
                                   cmd.rfind("set_vbat", 0) == 0 ||
@@ -2915,7 +3092,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, usageAndState(topic), true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel,
-                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_lora / set_freq / panic / panic_ok\n[E] mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <comando>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
+                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_url / panic / panic_ok\n[E] mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <comando>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
         }
     }
     else if (cmd == "ping") {
@@ -3255,6 +3432,31 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
     else if (cmd.rfind("ch_url", 0) == 0) {
         std::string arg = (cmd.length() > 6) ? cmd.substr(6) : "";
         while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
+        // V5.3 (bloque 5): "all" genera el ESPEJO COMPLETO del nodo (todos los huecos + la radio), que
+        // es exactamente lo que se aplica con set_url. Sin argumento se mantiene el enlace de un canal.
+        if (strcasecmp(arg.c_str(), "all") == 0 || strcasecmp(arg.c_str(), "todo") == 0) {
+            // SEGURIDAD: el espejo lleva la CLAVE DE TODOS LOS CANALES, asi que se contesta SIEMPRE por
+            // privado y NUNCA en difusion. Antes, pedirlo en el canal de flota publicaba el llavero
+            // entero a cualquiera que estuviera en ese canal.
+            std::string espejo = generateFullChannelUrl();
+            // La vuelta (set_url) viaja en UN mensaje de radio y NO hay reensamblado de entrada, asi que
+            // si el espejo no cabe hay que decirlo aqui. El tope es el del texto de un mensaje menos lo
+            // que ocupa la propia orden ("/nava set_url ") y, si va dirigida, el prefijo "!IDXXXXXXXX ".
+            // Se usa el tope PEOR de los dos casos, para no prometer de mas.
+            const size_t prefijoOrden = sizeof("/nava set_url ") - 1;
+            const size_t prefijoDirigido = 10; // "!12345678 "
+            size_t topeTexto =
+                sizeof(((meshtastic_MeshPacket *)nullptr)->decoded.payload.bytes) - prefijoOrden - prefijoDirigido;
+            if (espejo.length() > topeTexto) {
+                char aviso[170];
+                snprintf(aviso, sizeof(aviso),
+                         " [AVISO: %u CARACTERES. SI VA DIRIGIDO CON !ID EL TOPE ES %u: APLICALO POR USB O CON MENOS CANALES]",
+                         (unsigned)espejo.length(), (unsigned)topeTexto);
+                espejo += aviso;
+            }
+            enqueueResponse(fromNode, 0, espejo, true, false, hops);
+            return;
+        }
         int slot = 0;
         if (!arg.empty()) {
             slot = atoi(arg.c_str());
@@ -3264,7 +3466,291 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             }
         }
         std::string url = generateChannelUrl(slot);
-        enqueueResponse(replyDest, replyChannel, url, true, false, hops);
+        // SEGURIDAD: el enlace lleva la clave del canal: se contesta por privado, nunca en difusion.
+        enqueueResponse(fromNode, 0, url, true, false, hops);
+    }
+    else if (cmd.rfind("set_url", 0) == 0) {
+        // V5.3 (bloque 5): ENLACE DE CANALES. Aplica de una vez el juego completo de canales (y la parte
+        // de radio que define la red) que venga en una URL de meshtastic.org. Es SIEMPRE un reemplazo: el
+        // nodo queda como dice el enlace y lo que no venga en el se quita (se avisa de lo que se quita).
+        // No hay modo "anadir" ni vuelta atras: si hay que volver, se reenvia el enlace anterior. El
+        // canal de rescate (slot 1) esta PROTEGIDO: el enlace no lo cambia.
+        std::string arg = (cmd.length() > 7) ? cmd.substr(7) : "";
+        while (!arg.empty() && (arg.front() == ' ' || arg.front() == '\t')) arg.erase(0, 1);
+        while (!arg.empty() && (arg.back() == ' ' || arg.back() == '\t' || arg.back() == '\r' || arg.back() == '\n')) {
+            arg.pop_back();
+        }
+        if (arg.empty()) {
+            enqueueResponse(replyDest, replyChannel, usageAndState("set_url"), true, false, hops);
+            return;
+        }
+        // Vale el enlace entero o solo lo que va despues de la '#'. Si traia el antiguo "add=true", se
+        // avisa: ese modo ya no existe, el enlace SIEMPRE reemplaza.
+        size_t posHash = arg.find('#');
+        bool traiaAdd = false;
+        if (posHash != std::string::npos) {
+            std::string cola = arg.substr(0, posHash);
+            for (auto &c : cola) c = (char)tolower((unsigned char)c);
+            traiaAdd = (cola.find("add=true") != std::string::npos || cola.find("add=1") != std::string::npos);
+            arg = arg.substr(posHash + 1);
+        }
+        while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
+        if (arg.empty()) {
+            enqueueResponse(replyDest, replyChannel, "ERR: FALTA EL CONTENIDO DEL ENLACE (LO QUE VA TRAS LA #)", true, false, hops);
+            return;
+        }
+        // El juego de canales (~600 B) y el bufer se dejan en ESTATICO y se limpia a mano: no conviene
+        // gastarlos en la pila del hilo del enrutador. No hay reentrada: el comando corre entero.
+        static uint8_t urlBuf[MESHTASTIC_MESHTASTIC_APPONLY_PB_H_MAX_SIZE];
+        size_t urlLen = 0;
+        if (!base64Decode(arg, urlBuf, urlLen, sizeof(urlBuf)) || urlLen == 0) {
+            enqueueResponse(replyDest, replyChannel, "ERR: ENLACE ILEGIBLE (BASE64)", true, false, hops);
+            return;
+        }
+        static meshtastic_ChannelSet cs;
+        memset(&cs, 0, sizeof(cs));
+        if (!pb_decode_from_bytes(urlBuf, urlLen, &meshtastic_ChannelSet_msg, &cs) || cs.settings_count == 0) {
+            enqueueResponse(replyDest, replyChannel, "ERR: ENLACE ILEGIBLE (CONTENIDO)", true, false, hops);
+            return;
+        }
+
+        // Un hueco esta "puesto" si trae nombre o clave; el resto son huecos vacios.
+        auto traeCanal = [](uint8_t i) {
+            if (i >= cs.settings_count) return false;
+            return (cs.settings[i].name[0] != '\0' || cs.settings[i].psk.size > 0);
+        };
+
+        // 1) Nombres reservados (los usa el firmware para funciones especiales) y canales PUBLICOS
+        // disfrazados de privados (nombre de preset, o "Custom", con la clave de fabrica).
+        for (uint8_t i = 0; i < (uint8_t)MAX_NUM_CHANNELS && i < cs.settings_count; i++) {
+            if (!traeCanal(i) || i == 1) continue;
+            const char *n = cs.settings[i].name;
+            if (strcasecmp(n, Channels::adminChannel) == 0 || strcasecmp(n, Channels::gpioChannel) == 0 ||
+                strcasecmp(n, Channels::serialChannel) == 0 || strcasecmp(n, Channels::mqttChannel) == 0) {
+                char errBuf[140];
+                snprintf(errBuf, sizeof(errBuf), "ERR: NOMBRE RESERVADO (%s): admin/gpio/serial/mqtt son del firmware", n);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+            // Un hueco con el alias 0 queda SIN CIFRAR de verdad (no hereda la clave del principal), asi
+            // que deja la red abierta aunque los demas canales vayan cifrados.
+            if (navaClaveSinCifrar(cs.settings[i])) {
+                char errBuf[170];
+                snprintf(errBuf, sizeof(errBuf), "ERR: CANAL %d SIN CIFRAR (LA CLAVE VIENE APAGADA). NO SE APLICA", (int)i);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+            // Regla de nombres: un canal con nombre de preset (o "Custom", o sin nombre, que es cuando el
+            // firmware le pone el del preset) y la clave publica de fabrica NO es una red privada: es el
+            // canal publico de Meshtastic, y no debe entrar en el espejo.
+            if (navaCanalEsPublico(cs.settings[i])) {
+                char errBuf[170];
+                snprintf(errBuf, sizeof(errBuf),
+                         "ERR: CANAL %d ('%s') ES EL CANAL PUBLICO DE MESHTASTIC (CLAVE DE FABRICA). NO SE APLICA", (int)i,
+                         cs.settings[i].name[0] != '\0' ? cs.settings[i].name : "sin nombre");
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+        }
+
+        // 2) Sin canal principal no hay nodo que valga, y un principal SIN CLAVE dejaria el canal 0
+        // abierto (ademas, los secundarios que no traigan clave propia heredan esa clave vacia).
+        if (!traeCanal(0)) {
+            enqueueResponse(replyDest, replyChannel, "ERR: EL ENLACE NO TRAE CANAL PRINCIPAL. NO SE APLICA", true, false, hops);
+            return;
+        }
+        if (navaClaveApagada(cs.settings[0])) {
+            enqueueResponse(replyDest, replyChannel, "ERR: EL CANAL PRINCIPAL VIENE SIN CLAVE (RED ABIERTA). NO SE APLICA", true,
+                            false, hops);
+            return;
+        }
+        // El principal es la raiz de la red. La clave publica NO se bloquea (los perfiles de la flota la
+        // llevan de fabrica en el canal 0, y bloquearla dejaria el espejo de un nodo recien flasheado sin
+        // poder aplicarse): se AVISA en la respuesta, que es lo decidido. Lo que si bloquea es la clave
+        // apagada y el canal sin clave, porque eso deja la red abierta de verdad.
+        bool principalPublico = navaClaveEsPublica(cs.settings[0]);
+
+        // 3) La consola no puede quedarse sin canal (el rescate esta protegido y no se pierde).
+        uint8_t cliSlotAplicar = prefs.cliChannelSlot;
+        if (cliSlotAplicar < 1 || cliSlotAplicar > 7) cliSlotAplicar = 1;
+        if (cliSlotAplicar >= 2 && !traeCanal(cliSlotAplicar)) {
+            char errBuf[150];
+            snprintf(errBuf, sizeof(errBuf),
+                     "ERR: EL ENLACE DEJARIA AL NODO SIN CANAL DE CONSOLA (SLOT %d). NO SE APLICA", cliSlotAplicar);
+            enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+            return;
+        }
+        // La consola tampoco se bloquea por llevar la clave publica (el canal de consola clasico, el slot
+        // 1, es publico por diseno), pero tambien se avisa. Sin clave propia no pasa nada: hereda la del
+        // principal, que ya ha pasado el filtro de arriba.
+        bool consolaPublica =
+            (cliSlotAplicar >= 2 && traeCanal(cliSlotAplicar) && navaClaveEsPublica(cs.settings[cliSlotAplicar]));
+
+        // 4) Aplicar hueco a hueco. El slot 1 (rescate) NO se toca.
+        int puestos = 0;
+        int quitados = 0;
+        std::string nombresQuitados;
+        bool consolaCambia = false;
+        char consolaNombre[16] = "";
+        bool rescateDistinto = false;
+        for (uint8_t i = 0; i < (uint8_t)MAX_NUM_CHANNELS; i++) {
+            const meshtastic_Channel &antes = channels.getByIndex(i);
+            bool habia = (antes.has_settings && antes.role != meshtastic_Channel_Role_DISABLED);
+            // El nombre se copia ANTES de tocar la tabla: "antes" es una REFERENCIA al propio array de
+            // canales y channels.setChannel() lo deja a cero, asi que leerlo despues daba lista vacia.
+            char nombreAntes[16];
+            snprintf(nombreAntes, sizeof(nombreAntes), "%s", antes.settings.name);
+            if (i == 1) {
+                if (habia && traeCanal(1)) puestos++;
+                if (traeCanal(1) && (strcmp(cs.settings[1].name, antes.settings.name) != 0 ||
+                                     cs.settings[1].psk.size != antes.settings.psk.size ||
+                                     (cs.settings[1].psk.size > 0 &&
+                                      memcmp(cs.settings[1].psk.bytes, antes.settings.psk.bytes, cs.settings[1].psk.size) != 0))) {
+                    rescateDistinto = true;
+                }
+                continue;
+            }
+            bool trae = traeCanal(i);
+            bool cambiaContenido = false;
+            if (habia && trae) {
+                cambiaContenido = (strcmp(antes.settings.name, cs.settings[i].name) != 0) ||
+                                  (antes.settings.psk.size != cs.settings[i].psk.size) ||
+                                  (antes.settings.psk.size > 0 &&
+                                   memcmp(antes.settings.psk.bytes, cs.settings[i].psk.bytes, antes.settings.psk.size) != 0);
+            }
+            if (trae) {
+                meshtastic_Channel ch = meshtastic_Channel_init_zero;
+                ch.index = i;
+                ch.role = (i == 0) ? meshtastic_Channel_Role_PRIMARY : meshtastic_Channel_Role_SECONDARY;
+                ch.has_settings = true;
+                ch.settings = cs.settings[i];
+                channels.setChannel(ch);
+                puestos++;
+                if (i == cliSlotAplicar) {
+                    snprintf(consolaNombre, sizeof(consolaNombre), "%s", cs.settings[i].name);
+                    if (!habia || cambiaContenido) consolaCambia = true;
+                }
+            } else if (habia) {
+                meshtastic_Channel ch = meshtastic_Channel_init_zero;
+                ch.index = i;
+                ch.role = meshtastic_Channel_Role_DISABLED;
+                channels.setChannel(ch);
+                quitados++;
+                if (!nombresQuitados.empty()) nombresQuitados += ", ";
+                nombresQuitados += nombreAntes;
+                if (i == cliSlotAplicar) consolaCambia = true;
+            }
+        }
+        channels.onConfigChanged();
+        nodeDB->saveToDisk(SEGMENT_CHANNELS);
+
+        // 5) Sincronizar el respaldo: si no, tras un borrado resucitarian los canales VIEJOS y el nodo se
+        // quedaria fuera de la red nueva.
+        syncChannel0FromConfig();
+        for (uint8_t i = 2; i < (uint8_t)MAX_NUM_CHANNELS; i++) syncCustomChannelFromConfig(i);
+
+        // 6) La parte de radio: solo los campos que definen la RED, y VALIDADA. Los demas ajustes de radio
+        // del nodo (limite de saltos, OK to MQTT, ignorar MQTT, TX encendido/apagado...) NO se tocan. Si
+        // el enlace no trae radio utilizable, la radio se queda como esta y se dice.
+        bool radioCambia = false;
+        std::string radioTxt = "RADIO: SIN DATOS EN EL ENLACE (SE MANTIENE LA ACTUAL)";
+        if (cs.has_lora_config && cs.lora_config.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
+            const meshtastic_Config_LoRaConfig &nl = cs.lora_config;
+            // Modulacion con los MISMOS rangos que validaba set_lora (retirado), frecuencia con el rango
+            // que validaba set_freq (retirado), y la potencia: el 0 es "por defecto de la region" (la
+            // MAXIMA), asi que no se acepta y se mantiene la del nodo, igual que hace set_txpower.
+            bool modulacionOk =
+                nl.use_preset ? ((uint8_t)nl.modem_preset <= (uint8_t)_meshtastic_Config_LoRaConfig_ModemPreset_MAX)
+                              : (nl.spread_factor >= 5 && nl.spread_factor <= 12 && nl.coding_rate >= 4 &&
+                                 nl.coding_rate <= 8 && nl.bandwidth >= 31 && nl.bandwidth <= 500);
+            bool freqOk = (nl.override_frequency == 0.0f ||
+                           (nl.override_frequency >= 400.0f && nl.override_frequency <= 950.0f));
+            // El "slot" de la radio (numero de canal dentro de la banda de la region) puede llegar a ~200
+            // segun la region: no es el indice del canal de la tabla.
+            bool slotOk = (nl.channel_num <= 200);
+            bool pwrOk = ((nl.tx_power >= -5 && nl.tx_power <= -1) || (nl.tx_power >= 1 && nl.tx_power <= NAVA_MAX_TX));
+            if (!modulacionOk || !freqOk || !slotOk) {
+                radioTxt = "RADIO: DATOS INVALIDOS EN EL ENLACE (SE MANTIENE LA ACTUAL)";
+            } else {
+                radioCambia = (config.lora.region != nl.region || config.lora.use_preset != nl.use_preset ||
+                               config.lora.modem_preset != nl.modem_preset || config.lora.bandwidth != nl.bandwidth ||
+                               config.lora.spread_factor != nl.spread_factor || config.lora.coding_rate != nl.coding_rate ||
+                               config.lora.channel_num != nl.channel_num ||
+                               config.lora.override_frequency != nl.override_frequency ||
+                               (pwrOk && config.lora.tx_power != nl.tx_power));
+                if (radioCambia) {
+                    config.lora.region = nl.region;
+                    config.lora.use_preset = nl.use_preset;
+                    config.lora.modem_preset = nl.modem_preset;
+                    config.lora.bandwidth = nl.bandwidth;
+                    config.lora.spread_factor = nl.spread_factor;
+                    config.lora.coding_rate = nl.coding_rate;
+                    config.lora.channel_num = nl.channel_num;
+                    config.lora.override_frequency = nl.override_frequency;
+                    if (pwrOk) config.lora.tx_power = nl.tx_power;
+                    nodeDB->saveToDisk(SEGMENT_CONFIG);
+                    prefs.lora_configured = 1;
+                    prefs.lora_use_preset = config.lora.use_preset ? 1 : 0;
+                    prefs.lora_modem_preset = (uint8_t)config.lora.modem_preset;
+                    prefs.lora_bandwidth = config.lora.bandwidth;
+                    prefs.lora_spread_factor = config.lora.spread_factor;
+                    prefs.lora_coding_rate = config.lora.coding_rate;
+                    prefs.lora_channel_num = config.lora.channel_num;
+                    prefs.lora_override_frequency = config.lora.override_frequency;
+                    prefs.lora_tx_power = config.lora.tx_power;
+                    saveResiliencePrefs();
+                }
+                char rBuf[120];
+                if (config.lora.use_preset)
+                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d PRESET %d, SLOT %d, %ddBm%s", (int)config.lora.region,
+                             (int)config.lora.modem_preset, (int)config.lora.channel_num, (int)config.lora.tx_power,
+                             pwrOk ? "" : " (POTENCIA DEL NODO)");
+                else
+                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d %.4fMHz BW%u SF%u CR%u SLOT%u %ddBm%s", (int)config.lora.region,
+                             config.lora.override_frequency, (unsigned)config.lora.bandwidth,
+                             (unsigned)config.lora.spread_factor, (unsigned)config.lora.coding_rate,
+                             (unsigned)config.lora.channel_num, (int)config.lora.tx_power,
+                             pwrOk ? "" : " (POTENCIA DEL NODO)");
+                radioTxt = rBuf;
+            }
+        }
+
+        // 7) Contarlo TODO antes de reiniciar (o de no reiniciar).
+        std::string resp = "OK: ENLACE APLICADO. CANALES: " + std::to_string(puestos) + " PUESTOS";
+        if (quitados > 0) {
+            resp += ", " + std::to_string(quitados) + " QUITADOS (" + nombresQuitados + ")";
+        }
+        if (consolaCambia) {
+            char cBuf[90];
+            snprintf(cBuf, sizeof(cBuf), ". AVISO: TU CONSOLA (SLOT %d) PASA AL CANAL '%s'", (int)cliSlotAplicar,
+                     consolaNombre[0] != '\0' ? consolaNombre : "SIN NOMBRE");
+            resp += cBuf;
+        }
+        if (rescateDistinto) resp += ". AVISO: EL RESCATE (SLOT 1) NO SE TOCA";
+        if (principalPublico)
+            resp += ". AVISO: EL CANAL PRINCIPAL VA CON LA CLAVE PUBLICA DE FABRICA (LO LEE QUIEN SINTONICE)";
+        if (consolaPublica) {
+            char cBuf[110];
+            snprintf(cBuf, sizeof(cBuf), ". AVISO: EL CANAL DE CONSOLA (SLOT %d) VA CON LA CLAVE PUBLICA", (int)cliSlotAplicar);
+            resp += cBuf;
+        }
+        if (traiaAdd) resp += ". AVISO: EL MODO ANADIR YA NO EXISTE, SE REEMPLAZA TODO";
+        // Un enlace de la app que solo trae UN canal es "compartir ese canal", no un espejo: se aplica
+        // como principal y se quita el resto, asi que hay que decirlo bien claro.
+        if (cs.settings_count < 2) {
+            resp += ". AVISO: SOLO TRAE 1 CANAL: SE APLICA COMO PRINCIPAL (para el juego completo usa ch_url all)";
+        }
+        resp += ". " + radioTxt;
+        resp += radioCambia ? ". REINICIO DIFERIDO PARA APLICAR LA RADIO" : ". SIN REINICIO (la radio no cambia)";
+        enqueueResponse(replyDest, replyChannel, resp, true, false, hops);
+        logEvent("SET_URL: %d puestos, %d quitados", puestos, quitados);
+
+        if (radioCambia) {
+            // D-7: persistir la orden antes de armarla (sobrevive a reinicio, a otro comando y a un corte)
+            savePendingAction(NAVA_DEFERRED_LORA_CHANGE);
+            deferredAction = NAVA_DEFERRED_LORA_CHANGE;
+            preRebootArmed = false;
+        }
     }
     else if (cmd.rfind("set_cli_chan", 0) == 0) {
         std::string arg = (cmd.length() > 12) ? cmd.substr(12) : "";
@@ -3652,87 +4138,15 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         deferredAction = NAVA_DEFERRED_LORA_CHANGE;
         preRebootArmed = false;
     }
-    else if (cmd.rfind("set_lora", 0) == 0) {
-        std::string arg = (cmd.length() > 8) ? cmd.substr(8) : "";
-        while (!arg.empty() && (arg.front() == ' ' || arg.front() == '\t')) arg.erase(0, 1);
-        if (arg.empty()) {
-            enqueueResponse(replyDest, replyChannel, usageAndState("set_lora"), true, false, hops);
-            return;
-        }
-        uint32_t bw = 0, sf = 0, cr = 0, slot = 0, pwr = 0;
-        float freq = 0.0f;
-        int n = sscanf(arg.c_str(), "%u %u %u %f %u %u", &bw, &sf, &cr, &freq, &slot, &pwr);
-        if (n < 5) {
-            enqueueResponse(replyDest, replyChannel, "ERR: USO: set_lora <bw 31-500> <sf 5-12> <cr 4-8> <freq_mhz> <slot> [txpower]", true, false, hops);
-            return;
-        }
-        if (sf < 5 || sf > 12 || cr < 4 || cr > 8 || freq < 400.0f || freq > 950.0f) {
-            enqueueResponse(replyDest, replyChannel, "ERR: PARAMETROS LORA FUERA DE RANGO", true, false, hops);
-            return;
-        }
-        config.lora.use_preset = false;
-        config.lora.bandwidth = bw;
-        config.lora.spread_factor = sf;
-        config.lora.coding_rate = cr;
-        config.lora.override_frequency = freq;
-        config.lora.channel_num = slot;
-        if (n >= 6 && pwr > 0) {
-            config.lora.tx_power = pwr;
-            prefs.lora_tx_power = pwr;
-        }
-        nodeDB->saveToDisk(SEGMENT_CONFIG);
-
-        prefs.lora_use_preset = 0;
-        prefs.lora_bandwidth = bw;
-        prefs.lora_spread_factor = sf;
-        prefs.lora_coding_rate = cr;
-        prefs.lora_override_frequency = freq;
-        prefs.lora_channel_num = slot;
-        prefs.lora_configured = 1;
-        saveResiliencePrefs();
-
-        logEvent("SET_LORA SF%u BW%u", sf, bw);
-        char respBuf[120];
-        snprintf(respBuf, sizeof(respBuf), "OK: CAPA LORA ACTUALIZADA (BW:%u SF:%u CR:%u Freq:%.4f Slot:%u). Reinicio diferido", bw, sf, cr, freq, slot);
-        enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
-
-        // D-7: persistir la orden antes de armarla (sobrevive a reinicio, a otro comando y a un corte)
-        savePendingAction(NAVA_DEFERRED_LORA_CHANGE);
-        deferredAction = NAVA_DEFERRED_LORA_CHANGE;
-        preRebootArmed = false;
-    }
-    else if (cmd.rfind("set_freq", 0) == 0) {
-        std::string arg = (cmd.length() > 8) ? cmd.substr(8) : "";
-        while (!arg.empty() && (arg.front() == ' ' || arg.front() == '\t')) arg.erase(0, 1);
-        if (arg.empty()) {
-            enqueueResponse(replyDest, replyChannel, usageAndState("set_freq"), true, false, hops);
-            return;
-        }
-        float freq = 0.0f;
-        uint32_t slot = config.lora.channel_num;
-        int n = sscanf(arg.c_str(), "%f %u", &freq, &slot);
-        if (n < 1 || freq < 400.0f || freq > 950.0f) {
-            enqueueResponse(replyDest, replyChannel, "ERR: FRECUENCIA INVALIDA (400.0 - 950.0 MHz). USO: set_freq <freq_mhz> [slot]", true, false, hops);
-            return;
-        }
-        config.lora.override_frequency = freq;
-        config.lora.channel_num = slot;
-        nodeDB->saveToDisk(SEGMENT_CONFIG);
-
-        prefs.lora_override_frequency = freq;
-        prefs.lora_channel_num = slot;
-        prefs.lora_configured = 1;
-        saveResiliencePrefs();
-
-        logEvent("SET_FREQ %.4f MHz", freq);
-        char respBuf[100];
-        snprintf(respBuf, sizeof(respBuf), "OK: FRECUENCIA APLICADA (%.4f MHz Slot %u). Reinicio diferido", freq, slot);
-        enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
-
-        // D-7: persistir la orden antes de armarla (sobrevive a reinicio, a otro comando y a un corte)
-        savePendingAction(NAVA_DEFERRED_LORA_CHANGE);
-        deferredAction = NAVA_DEFERRED_LORA_CHANGE;
-        preRebootArmed = false;
+    // V5.3 (bloque 5): set_lora y set_freq SE RETIRAN del todo (decision acordada con el operador de
+    // NavaTastic). No se pierde nada: NO FUNCIONABAN, porque la lectura de decimales no esta enlazada en
+    // estos builds (newlib-nano no trae scanf-float: "%f" devuelve 0 SIN consumir el numero, asi que el
+    // campo de la frecuencia se saltaba y se leia basura como slot). Se deja solo el aviso, para que quien
+    // los tuviera apuntados sepa por donde ir: la modulacion se cambia con set_preset y toda la red
+    // (canales + radio) con set_url. Es tambien lo que hace interoperables los dos juegos de comandos.
+    else if (cmd.rfind("set_lora", 0) == 0 || cmd.rfind("set_freq", 0) == 0) {
+        enqueueResponse(replyDest, replyChannel,
+                        "ERR: COMANDO RETIRADO. USA set_preset (modulacion) O set_url (enlace completo)", true, false, hops);
     }
     else if (cmd.rfind("panic_ok", 0) == 0) {
         cancelPanicRollback();
@@ -5215,7 +5629,7 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "ch_del")
         return "ch_del: Deshabilita el canal del slot seleccionado. Uso: /nava ch_del <slot 2-7>";
     else if (topic == "ch_url")
-        return "ch_url: Genera la URL oficial para importar el canal en la app del movil. Uso: /nava ch_url [slot 0-7]";
+        return "ch_url: Genera la URL oficial de canales. Uso: /nava ch_url [slot 0-7|all] (all = espejo completo del nodo)";
     else if (topic == "set_cli_chan")
         return "set_cli_chan: Redirige escucha de NavaCLI y avisos solares al slot elegido. Uso: /nava set_cli_chan [slot 1-7]";
     else if (topic == "navadmin_mute")
@@ -5238,10 +5652,11 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
         return "set_telem_tx: Controla la emision de telemetria (default 12h). Cambia los 5 tipos a la vez; desde la App oficial puedes poner intervalos distintos por tipo (NAV8). Uso: /nava set_telem_tx [on(12h)|off|minutos]";
     else if (topic == "set_preset")
         return "set_preset: Cambia el modem preset LoRa estandar y reinicia. Uso: /nava set_preset [long_fast|medium_fast|short_fast|long_slow|short_slow|medium_slow|long_moderate|short_turbo]";
-    else if (topic == "set_lora")
-        return "set_lora: Configura la capa fisica LoRa personalizada. Uso: /nava set_lora <bw 31-500> <sf 5-12> <cr 4-8> <freq_mhz> <slot> [txpower]";
-    else if (topic == "set_freq")
-        return "set_freq: Ajusta la frecuencia fisica LoRa y slot. Uso: /nava set_freq <freq_mhz> [slot]";
+    else if (topic == "set_url")
+        return "set_url: Aplica los canales y la radio que vengan en una URL de meshtastic.org (reemplaza el juego "
+               "completo; el canal de rescate no se toca). Uso: /nava set_url <enlace>";
+    else if (topic == "set_lora" || topic == "set_freq")
+        return "set_lora/set_freq: COMANDO RETIRADO. La modulacion se cambia con set_preset y la red completa con set_url";
     else if (topic == "panic")
         return "panic: Evacuacion coordinada de emergencia. SOLO DM PKI o canal privado (bloqueado en Navadmin). Uso: /nava panic <preset|sfnarrow> [minutos=10] [rollback_mins=0]";
     else if (topic == "panic_ok")
@@ -5342,7 +5757,12 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         return "USO: ch_del <slot 2-7>\nDeshabilita el canal del slot.";
     }
     if (topic == "ch_url") {
-        return "USO: ch_url [slot 0-7]\nGenera la URL meshtastic.org/e/#... para importar el canal.";
+        return "USO: ch_url [slot 0-7|all]\nGenera la URL meshtastic.org/e/#... (all = el espejo completo del nodo, "
+               "que es lo que aplica set_url). Se contesta SIEMPRE por privado: la URL lleva la clave.";
+    }
+    if (topic == "set_url") {
+        return "set_url: Aplica los canales y la radio de una URL de meshtastic.org. REEMPLAZA: lo que no venga se "
+               "quita (el rescate no se toca). Uso: /nava set_url <enlace>";
     }
     if (topic == "set_cli_chan") {
         snprintf(buf, sizeof(buf), "CLI CHAN ACT: Slot %d (%s). USO: set_cli_chan [slot 1-7]", prefs.cliChannelSlot, channels.getName(prefs.cliChannelSlot));
@@ -5506,13 +5926,8 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         snprintf(buf, sizeof(buf), "PRESET ACT: %s. USO: set_preset [long_fast|medium_fast|short_fast|long_slow|short_slow|medium_slow|long_moderate|short_turbo]", config.lora.use_preset ? "PRESET" : "CUSTOM");
         return buf;
     }
-    if (topic == "set_lora") {
-        snprintf(buf, sizeof(buf), "LORA ACT: BW%u SF%u CR4/%u Freq:%.4f Slot:%u. USO: set_lora <bw> <sf> <cr> <freq_mhz> <slot> [txpower]", config.lora.bandwidth, config.lora.spread_factor, config.lora.coding_rate, config.lora.override_frequency, config.lora.channel_num);
-        return buf;
-    }
-    if (topic == "set_freq") {
-        snprintf(buf, sizeof(buf), "FREQ ACT: %.4f MHz (Slot %u). USO: set_freq <freq_mhz> [slot]", config.lora.override_frequency, config.lora.channel_num);
-        return buf;
+    if (topic == "set_lora" || topic == "set_freq") {
+        return "COMANDO RETIRADO. La modulacion se cambia con set_preset y la red completa (canales + radio) con set_url.";
     }
     if (topic == "panic") {
         snprintf(buf, sizeof(buf), "PANIC: %s. USO: panic <preset|sfnarrow> [minutos=10] [rollback_mins=0]", prefs.panic_active ? "ACTIVO" : "INACTIVO");

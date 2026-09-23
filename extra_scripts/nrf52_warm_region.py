@@ -17,7 +17,12 @@ import os
 
 Import("env")
 
-WARM_REGION_BASE = 0xEC000  # keep in sync with WARM_FLASH_REGION_BASE in WarmNodeStore.h (1 x 4 KB record-ring desde NAVARICO-V6 13/09; antes 2 paginas / 0xEB000 y 3 / 0xEA000)
+# NAVARICO-V6 (23/09, "tramo 2 sin mudanza"): este guard defiende ahora el ORIGEN DE LITTLEFS (0xED000),
+# que es la frontera que de verdad importa: ahi empiezan los ficheros del nodo. El firmware puede llegar
+# hasta ahi, y NO se solapa con el anillo del warm-node-store (0xEC000-0xED000) porque en RAM-only el
+# anillo no lee ni escribe flash nunca (ver WarmNodeStore.h, con su propio static_assert para el caso de
+# que alguien active la escritura). Antes el tope era 0xEC000 y el guard defendia la base del anillo.
+WARM_REGION_BASE = 0xED000
 
 _tc = env.PioPlatform().get_package_dir("toolchain-gccarmnoneeabi") or ""
 _NM = os.path.join(_tc, "bin", "arm-none-eabi-nm")
@@ -48,19 +53,18 @@ def _assert_warm_region_clear(source, target, env):
     flash_end = syms["__etext"] + (syms["__data_end__"] - syms["__data_start__"])
     if flash_end > WARM_REGION_BASE:
         sys.stderr.write(
-            "\n*** nrf52 warm-region guard: image ends at 0x%X, past the reserved "
-            "warm-store region at 0x%X ***\n"
-            "The 12 KB region at 0xEA000 holds the WarmNodeStore record-ring; a warm-store\n"
-            "save would overwrite this firmware's tail. Shrink the image, or shrink/move\n"
-            "the region (WARM_FLASH_REGION_BASE in src/mesh/WarmNodeStore.h, the FLASH\n"
-            "LENGTH in src/platform/nrf52/nrf52840_s140_v6.ld and _v7.ld, and this guard).\n\n"
+            "\n*** nrf52 LittleFS guard: image ends at 0x%X, PAST THE START OF LITTLEFS at 0x%X ***\n"
+            "LittleFS holds the node's files (/resilience.bin, /pending.bin, /fr.bin): writing firmware\n"
+            "over it would destroy them. Shrink the image, or move LittleFS and the warm-store region\n"
+            "together (WARM_FLASH_REGION_BASE in src/mesh/WarmNodeStore.h, the FLASH LENGTH in\n"
+            "src/platform/nrf52/nrf52840_s140_v6.ld and _v7.ld, and this guard).\n\n"
             % (flash_end, WARM_REGION_BASE)
         )
         from SCons.Script import Exit
 
         Exit(1)
     print(
-        "nrf52_warm_region: guard OK -- image ends at 0x%X, %d KB clear of the warm region"
+        "nrf52_warm_region: guard OK -- image ends at 0x%X, %d KB clear of LittleFS"
         % (flash_end, (WARM_REGION_BASE - flash_end) // 1024)
     )
 

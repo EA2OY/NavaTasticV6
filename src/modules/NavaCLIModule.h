@@ -1,6 +1,10 @@
 #pragma once
 #include "concurrency/OSThread.h"
 #include "SinglePortModule.h"
+// V5.3 (bloque 5): los dos generadores del enlace de canales usan meshtastic_ChannelSet, que vive en
+// apponly.pb.h. El .cpp ya lo incluia, pero la DECLARACION del metodo esta aqui, asi que el tipo tiene
+// que estar visible en la cabecera (es lo que hace el arbol de referencia).
+#include "../mesh/generated/meshtastic/apponly.pb.h"
 #include <map>
 #include <queue>
 #include <set>
@@ -406,6 +410,11 @@ class NavaCLIModule : public SinglePortModule, public concurrency::OSThread
     std::string usageAndState(const std::string &topic);
     std::string base64Encode(const uint8_t *data, size_t len);
     static bool base64Decode(const std::string &in, uint8_t *out, size_t &outLen, size_t maxLen);
+    // V5.3 (bloque 5): los dos generadores de enlace de canales. El primero es la parte comun (protobuf
+    // + base64 urlsafe); el segundo, el "espejo" del nodo (los 8 huecos + la config de radio), que es lo
+    // que aplica set_url. `set_url` es SIEMPRE reemplazo: lo que no venga en el enlace, se quita.
+    std::string channelSetToUrl(const meshtastic_ChannelSet &cs);
+    std::string generateFullChannelUrl();
     std::string generateChannelUrl(uint8_t channelIndex);
     std::string buildEnergyLine(); // V2: ADC mV + INA (V, ±mA, cargando/descargando) si disponible
     void logEvent(const char *fmt, ...);
