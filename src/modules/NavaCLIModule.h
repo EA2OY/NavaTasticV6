@@ -15,7 +15,7 @@
 // Bump manual en CADA release (visible en el commit). Se muestra en /nava status
 // y en el aviso [Boot]; permite saber por radio que version lleva un nodo.
 #ifndef NAVATASTIC_BUILD
-#define NAVATASTIC_BUILD "V5.1" // bump manual por release: V3 (4.3.2) -> V4 (4.3.3) -> V5 (4.3.4+, publicacion 29/08) -> V5.1 (09/09)
+#define NAVATASTIC_BUILD "NavaTastic V6" // bump manual por release: V3 (4.3.2) -> V4 (4.3.3) -> V5 (4.3.4+, publicacion 29/08) -> V5.1 (09/09) -> NavaTastic V6 (23/09, base Meshtastic 2.8.0)
 #endif
 
 // NAVARICO V5 (NAV8): formato atómico con validación CRC32 y protección spiLock.
