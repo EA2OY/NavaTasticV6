@@ -5,17 +5,22 @@ GROUP(-lgcc -lc -lnosys)
 
 MEMORY
 {
-  /* App region ends at 0xED000 = el origen de LittleFS (NAVARICO-V6 23/09, "tramo 2 sin mudanza").
-   * El anillo del warm-node-store se queda en 0xEC000-0xED000, EN MEDIO, y NO se solapa con el firmware
-   * porque en RAM-only no lee ni escribe flash NUNCA (ver src/mesh/WarmNodeStore.h, que ademas lleva un
-   * static_assert que falla el build si algun dia se activa la escritura sin recolocar el anillo).
-   * Resultado: el firmware gana los 4 KB del tramo 2 y LITTLEFS NO SE MUEVE, asi que NO hay migracion de
-   * ficheros del nodo (nada de Clean Slate). El guard de extra_scripts/nrf52_warm_region.py defiende
-   * ahora el ORIGEN DE LITTLEFS, que es la frontera que de verdad importa.
+  /* App region ends at 0xEC000: the warm-node-store record-ring is 1 x 4 KB page
+   * (src/mesh/WarmNodeStore.h, NAVARICO-V6 13/09). Con el anillo en RAM-only, sus paginas de flash
+   * no las usa nadie, asi que se devuelven al firmware. LittleFS (0xED000) NO se mueve: moverlo
+   * exigiria mudar los ficheros del nodo y eso es trabajo aparte, pendiente y documentado. Boards on
+   * the framework-default linker script are covered by the post-link guard in
+   * extra_scripts/nrf52_warm_region.py instead.
    *
    * S140 v6.x app region starts at 0x26000 (152 KB SoftDevice); v7.x uses 0x27000. All other
-   * boundaries are identical - see nrf52840_s140_v7.ld. */
-  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xED000 - 0x26000
+   * boundaries are identical - see nrf52840_s140_v7.ld.
+   *
+   * ⚠️ 23/09/2026 — LECCION CARA, NO REPETIR: se probo a subir este tope a 0xED000 ("tramo 2 sin
+   * mudanza", aprovechando que el anillo del warm-store es RAM-only y no toca flash) y el nodo de banco
+   * DEJO DE ARRANCAR. La cuenta de direcciones cuadraba (app hasta 0xEC600, LittleFS en 0xED000,
+   * bootloader en 0xF4000) y el build pasaba el guard, pero **0xEC000-0xED000 NO es territorio libre**.
+   * REVERTIDO. **NO VOLVER A SUBIR ESTE TOPE SIN BANCO DELANTE.** */
+  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xEC000 - 0x26000
 
   /* SRAM required by Softdevice depend on
    * - Attribute Table Size (Number of Services and Characteristics)

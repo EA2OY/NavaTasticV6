@@ -104,31 +104,8 @@ inline bool warmXeddsaSignedOf(const WarmNodeEntry &e)
 // comprueba que siguen cabiendo los 100 slots vivos). En esta configuracion el anillo NO escribe en
 // flash (parche RAM-only), asi que su tamano solo afecta a la cache en RAM.
 #define WARM_FLASH_PAGES 1u
-// NAVARICO-V6 (23/09): "TRAMO 2 SIN MUDANZA". El firmware sube su tope a 0xED000 (= origen de LittleFS,
-// que NO se mueve) y el anillo se queda donde estaba, 0xEC000-0xED000: es decir, EN MEDIO. No se
-// solapan porque **en RAM-only el anillo no lee ni escribe flash NUNCA** (ver WarmNodeStore.cpp: load()
-// sale antes de abrir nada y las tres vias de escritura -persistEntry/persistRemove/persistClear- salen
-// antes de tocar el anillo), y WARM_FLASH_REGION_BASE es una CONSTANTE DE COMPILACION: no reserva nada
-// en el enlazador. O sea que esa pagina es, hoy, territorio sin dueno, y se le devuelve al firmware.
-// Asi se ganan los 4 KB del tramo 2 SIN migrar ni un fichero del nodo (nada de Clean Slate), que era
-// justo lo que bloqueaba el traslado de LittleFS.
-// La restriccion original ("el anillo tiene que ir pegado por debajo de LittleFS") solo hace falta
-// CUANDO SE ESCRIBE el anillo: de eso se encarga el static_assert de abajo, que falla el build si algun
-// dia se desactiva el RAM-only sin recolocar antes el anillo.
 #define WARM_FLASH_REGION_BASE (0xED000u - WARM_FLASH_PAGES * WARM_FLASH_PAGE_SIZE) // 0xEC000
 #define WARM_FLASH_PAGE_ADDR(i) (WARM_FLASH_REGION_BASE + (i)*WARM_FLASH_PAGE_SIZE)
-
-// GUARDA DE SEGURIDAD: escribir el anillo exige que NO caiga dentro de la region de aplicacion, porque
-// el firmware puede llegar hasta 0xED000. Si alguien activa la escritura del anillo (quitando
-// USERPREFS_WARMSTORE_RAM_ONLY) sin bajar el anillo por debajo del tope del firmware, el primer guardado
-// pisaria codigo. Es mejor que NO COMPILE a que un nodo se quede inservible.
-#if !(defined(USERPREFS_WARMSTORE_RAM_ONLY) && USERPREFS_WARMSTORE_RAM_ONLY)
-static_assert(WARM_FLASH_REGION_BASE < 0xEC000u,
-              "WarmNodeStore: el anillo ESCRIBE en flash y su base queda dentro de la region de "
-              "aplicacion (el firmware llega hasta 0xED000). Baja WARM_FLASH_REGION_BASE por debajo del "
-              "tope del firmware en src/platform/nrf52/nrf52840_s140_v6.ld y _v7.ld antes de desactivar "
-              "USERPREFS_WARMSTORE_RAM_ONLY.");
-#endif
 #endif
 
 class WarmNodeStore
