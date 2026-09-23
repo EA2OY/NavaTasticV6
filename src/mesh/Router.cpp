@@ -1678,7 +1678,11 @@ void Router::perhapsHandleReceived(meshtastic_MeshPacket *p)
     // ajenos, porque el reenvio pasa por RoutingModule::sniffReceived -> perhapsRebroadcast, que
     // solo se dispara si el paquete llega a handleReceived. El `from` viaja en claro.
     if (!isFromUs(p)) {
-        if (NavaCLIModule::navaIsMuteActive()) {
+        // V5.3: con el mute activo el nodo NO se queda sordo: pasan los privados dirigidos a el (por ahi
+        // llega "mute off", que es la vuelta por radio); el resto del trafico ajeno se sigue descartando
+        // igual que antes. Las ALERTAS no se pueden distinguir aqui (la prioridad no viaja en los paquetes
+        // recibidos), asi que tambien se descartan.
+        if (NavaCLIModule::navaIsMuteActive() && !NavaCLIModule::navaMuteAllowsPacket(p)) {
             clearRoutingAuthCache();
             LOG_DEBUG("NavaCLI: Mute activo, descartando paquete ajeno");
             packetPool.release(p);

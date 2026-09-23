@@ -216,6 +216,11 @@ class NavaCLIModule : public SinglePortModule, public concurrency::OSThread
 
     // NAVARICO F21/F22/V5: chequeos estáticos para enrutamiento y diagnóstico en RAM
     static bool navaIsMuteActive();
+    // V5.3: con el mute activo se dejan pasar los privados dirigidos a ESTE nodo (es la vuelta por radio:
+    // por ahi llega "mute off" y entran los comandos de administracion); el resto del trafico ajeno se
+    // sigue descartando. Las alertas de difusion NO se pueden distinguir aqui: la prioridad no viaja en
+    // los paquetes recibidos.
+    static bool navaMuteAllowsPacket(const meshtastic_MeshPacket *p);
     static void recordRoutedPacket();
     static void logRamEvent(const char *msg);
     static bool isNodeIgnored(NodeNum node);
@@ -358,6 +363,18 @@ class NavaCLIModule : public SinglePortModule, public concurrency::OSThread
     void canonicalizeLoraForPreset(meshtastic_Config_LoRaConfig_ModemPreset preset);
     // NAVARICO 29/08 (fix I16bis): dormir la radio por la vía estándar antes de reinicios
     void navaPrepareRadioForReboot();
+
+    // D-7 (15/09/2026): la orden diferida se persiste en /pending.bin (fichero propio, ajeno al
+    // layout de ResiliencePrefs) para que un reinicio o un corte de luz no la pierdan en silencio.
+    bool pendingLoaded = false; // la restauracion desde disco se intenta una sola vez, ya inicializado todo
+    static void savePendingAction(NavaDeferredAction act);
+    // clearPendingAction devuelve si el fichero ha quedado REALMENTE borrado: los casos que
+    // reinician solo reinician si el borrado se confirma (ver consumePendingAndReboot).
+    static bool clearPendingAction();
+    void loadPendingAction();
+    // Consume la orden persistida y arma el reinicio, en ese orden y siempre juntos: si el borrado
+    // no se confirma, NO se reinicia (reiniciar con el fichero presente re-armaria la orden -> bucle).
+    void consumePendingAndReboot();
 
     // NAVARICO F20 (fix banco 2a): full_reset debe resetear los semi-persistentes a
     // defaults de perfil CONSERVANDO las 3 claves admin persistidas (no borrar el fichero).
