@@ -218,6 +218,21 @@ static const uint8_t SCK = PIN_SPI_SCK;
 #define BATTERY_LPCOMP_INPUT NRF_LPCOMP_INPUT_7
 #define BATTERY_LPCOMP_THRESHOLD NRF_LPCOMP_REF_SUPPLY_3_8
 
+// NAVARICO-V6 (bloque 2 del portaje V5.3): TOPE DE MANDO de la potencia TX, el que valida, anuncia y
+// usa "auto" en set_txpower. NO es el limite fisico de la radio: ese lo pone SX126X_MAX_POWER, que en
+// esta placa Meshtastic 2.8 deja en su valor por defecto (22) para las dos radios.
+// La misma placa lleva DOS radios segun el env (el modulo SX1262 de Seeed o un modulo E22P pinchado),
+// asi que el tope lo elige el env con -DNAVARICO_RADIO_E22P, igual que en NavaTastic V5.1:
+//   E22P  -> 12 dBm (el maximo que el usuario puede configurar)
+//   SX1262-> 22 dBm
+// OJO: sin esta definicion el respaldo del motor pondria 22 TAMBIEN en el Xiao con E22P, y el comando
+// anunciaria un valor que la radio no deberia darte.
+#ifdef NAVARICO_RADIO_E22P
+#define NAVA_MAX_TX_POWER_DBM 12
+#else
+#define NAVA_MAX_TX_POWER_DBM 22
+#endif
+
 /*
  * Wire Interfaces
  * Keep this section after potentially conflicting pin definitions

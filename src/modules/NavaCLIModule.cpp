@@ -61,6 +61,21 @@ static bool navaReservaPendingGlobal = false;
 #define NAV_NAME_SRC_HARDCODE 1
 #define NAV_NAME_SRC_APP 2
 
+// V5.3 (bloque 2): TOPE DE MANDO de la potencia TX, el que valida, anuncia y usa "auto". Lo define la
+// PLACA en su variant.h (NAVA_MAX_TX_POWER_DBM: E22P 12 / SX1262 22, igual que NavaTastic V5.1). Antes
+// habia un #ifdef NAVARICO_RADIO_E22P con 0-12 / 0-22 escrito a mano en tres sitios distintos (comando,
+// ayuda y estado), que es justo lo que hacia que el tope no se pudiera cambiar sin tocar codigo.
+// NOTA: NO es el limite fisico de la radio. Ese lo sigue aplicando la radio con SX126X_MAX_POWER en
+// limitPower() al inicializar; el de aqui es el rango que el operador puede pedir y el valor de "auto".
+// El respaldo por macro cubre una placa que no lo defina (2.8 no tiene HARDWARE_TX_POWER_LIMIT).
+#ifdef NAVA_MAX_TX_POWER_DBM
+static const int NAVA_MAX_TX = NAVA_MAX_TX_POWER_DBM;
+#elif defined(NAVARICO_RADIO_E22P)
+static const int NAVA_MAX_TX = 12;
+#else
+static const int NAVA_MAX_TX = 22;
+#endif
+
 // NAVARICO V5.1: helpers del nombre de fabrica y del contador de resets de fabrica (/fr.bin).
 // El nombre de fabrica es el que el propio nodo se genera solo ("Meshtastic %04x", NodeDB.cpp).
 static bool navaNameIsFactoryDefault(const char *longName)
@@ -4480,33 +4495,72 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, usageAndState("set_txpower"), true, false, hops);
             return;
         }
-        int p = atoi(arg.c_str());
-        // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio D): este comando escribia
-        // config.lora.tx_power y guardaba config, pero NUNCA prefs.lora_tx_power. Al arrancar,
-        // applyPersistedLoraConfig() reinyecta ese valor desde /resilience.bin y REVERTIA el cambio:
-        // el comando respondia OK y el ajuste desaparecia al reiniciar. Ahora escribe tambien el
-        // respaldo, igual que ya hacia set_lora. Decision del operador: el comando debe persistir.
-#ifdef NAVARICO_RADIO_E22P
-        if (p >= 0 && p <= 12) {
-            config.lora.tx_power = p;
-            prefs.lora_tx_power = p;
-            saveResiliencePrefs();
-            nodeDB->saveToDisk(SEGMENT_CONFIG);
-            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX E22P APLICADA (Persiste)", true, false, hops);
+        // V5.3 (bloque 2): el rango util de potencias REALES es -5..-1 y 1..tope (la radio admite desde
+        // -9; se deja margen). El 0 NO se acepta escrito como numero porque en el protocolo significa
+        // "por defecto de la region", que en la practica es la potencia MAXIMA: para eso esta la palabra
+        // "auto", que guarda el maximo de ESTA placa como un numero real (asi el estado nunca miente).
+        bool esAuto = (strcasecmp(arg.c_str(), "auto") == 0 || strcasecmp(arg.c_str(), "max") == 0 ||
+                       strcasecmp(arg.c_str(), "def") == 0 || strcasecmp(arg.c_str(), "default") == 0);
+        int p = 0;
+        if (esAuto) {
+            p = NAVA_MAX_TX;
         } else {
-            enqueueResponse(replyDest, replyChannel, "ERR: POTENCIA INVALIDA E22P (0-12 dBm)", true, false, hops);
+            char *fin = nullptr;
+            long v = strtol(arg.c_str(), &fin, 10);
+            if (fin == arg.c_str() || *fin != '\0') {
+                char errBuf[120];
+                snprintf(errBuf, sizeof(errBuf), "ERR: VALOR NO VALIDO. USA -5..-1, 1-%d O auto", NAVA_MAX_TX);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+            if (v == 0) {
+                char errBuf[140];
+                snprintf(errBuf, sizeof(errBuf),
+                         "ERR: EL 0 ES EL DEFECTO DE LA REGION (LA MAXIMA). USA -5..-1, 1-%d O auto", NAVA_MAX_TX);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+            // V5.3: el rango se comprueba sobre el valor LARGO, antes de estrecharlo a int, para que un
+            // numero enorme no se convierta en un valor valido al truncarse.
+            if (v < -5 || v > NAVA_MAX_TX) {
+                char errBuf[120];
+                snprintf(errBuf, sizeof(errBuf), "ERR: POTENCIA INVALIDA (-5..-1 O 1-%d dBm)", NAVA_MAX_TX);
+                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                return;
+            }
+            p = (int)v;
         }
-#else
-        if (p >= 0 && p <= 22) {
-            config.lora.tx_power = p;
-            prefs.lora_tx_power = p;
-            saveResiliencePrefs();
-            nodeDB->saveToDisk(SEGMENT_CONFIG);
-            enqueueResponse(replyDest, replyChannel, "OK: POTENCIA TX SX1262 APLICADA (Persiste)", true, false, hops);
-        } else {
-            enqueueResponse(replyDest, replyChannel, "ERR: POTENCIA INVALIDA SX1262 (0-22 dBm)", true, false, hops);
+        // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio D): este comando escribia config.lora.tx_power
+        // y guardaba config, pero NUNCA prefs.lora_tx_power. Al arrancar, applyPersistedLoraConfig()
+        // reinyecta ese valor desde /resilience.bin y REVERTIA el cambio: el comando respondia OK y el
+        // ajuste desaparecia al reiniciar. Ahora escribe tambien el respaldo, igual que ya hacia set_lora.
+        int previa = config.lora.tx_power;
+        config.lora.tx_power = p;
+        prefs.lora_tx_power = p;
+        saveResiliencePrefs();
+        nodeDB->saveToDisk(SEGMENT_CONFIG);
+        char valorTxt[48];
+        if (esAuto)
+            snprintf(valorTxt, sizeof(valorTxt), "AL MAXIMO DE ESTA PLACA (%ddBm)", p);
+        else
+            snprintf(valorTxt, sizeof(valorTxt), "%ddBm", p);
+        char respBuf[120];
+        if (p == previa) {
+            // V5.3: la radio ya esta en ese valor: se sincroniza el respaldo y NO se reinicia
+            snprintf(respBuf, sizeof(respBuf), "OK: POTENCIA TX %s (SIN CAMBIOS, sin reinicio)", valorTxt);
+            enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
+            return;
         }
-#endif
+        logEvent("SET_TXPOWER %d", p);
+        // V5.3: la potencia entra en la radio al INICIALIZARLA, asi que el cambio se aplica con el
+        // reinicio diferido (mismo camino que set_preset). Antes decia APLICADA y no aplicaba nada:
+        // el nodo seguia emitiendo con la potencia anterior y el estado leia el valor guardado.
+        snprintf(respBuf, sizeof(respBuf), "OK: POTENCIA TX %s GUARDADA (Reinicio diferido)", valorTxt);
+        enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
+        // D-7: persistir la orden antes de armarla (sobrevive a reinicio, a otro comando y a un corte)
+        savePendingAction(NAVA_DEFERRED_LORA_CHANGE);
+        deferredAction = NAVA_DEFERRED_LORA_CHANGE;
+        preRebootArmed = false;
     }
     else if (cmd.rfind("sleepmsg", 0) == 0) {
         std::string arg = (cmd.length() > 8) ? cmd.substr(8) : "";
@@ -5243,12 +5297,16 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
         return "set_tz: Establece la zona horaria POSIX. Uso: /nava set_tz [tz_POSIX]";
     else if (topic == "set_hops")
         return "set_hops: Limite de saltos LoRa. Uso: /nava set_hops [1-7]";
-    else if (topic == "set_txpower")
-#ifdef NAVARICO_RADIO_E22P
-        return "set_txpower: Potencia de transmision LoRa. Uso: /nava set_txpower [0-12]";
-#else
-        return "set_txpower: Potencia de transmision LoRa. Uso: /nava set_txpower [0-22]";
-#endif
+    else if (topic == "set_txpower") {
+        // V5.3 (bloque 2): el rango es el REAL de la placa (tope + los negativos que la radio admite).
+        // El 0 se rechaza a proposito (es "defecto de la region" = la maxima): para el maximo esta "auto".
+        char txHelp[168];
+        snprintf(txHelp, sizeof(txHelp),
+                 "set_txpower: Potencia de transmision LoRa en dBm. Uso: /nava set_txpower [-5..-1|1-%d|auto] "
+                 "(auto, max, def y default = el maximo de esta placa)",
+                 NAVA_MAX_TX);
+        return txHelp;
+    }
     else if (topic == "db_purge")
         return "db_purge: Expulsa de RAM los nodos que no son favoritos ni admin. Uso: /nava db_purge";
     else if (topic == "db_clear")
@@ -5355,11 +5413,23 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         return buf;
     }
     if (topic == "set_txpower") {
-#ifdef NAVARICO_RADIO_E22P
-        snprintf(buf, sizeof(buf), "TXPWR ACT: %ddBm (0-12). USO: set_txpower [0-12]", config.lora.tx_power);
-#else
-        snprintf(buf, sizeof(buf), "TXPWR ACT: %ddBm (0-22). USO: set_txpower [0-22]", config.lora.tx_power);
-#endif
+        // V5.3 (bloque 2): el estado distinguia mal dos cosas distintas. La potencia que el chip tiene
+        // AHORA solo cambia al inicializar la radio, asi que si hay un cambio ARMADO se dice "PENDIENTE
+        // REINICIO" en vez de dar por bueno el valor guardado (que es lo que hacia que el nodo
+        // confirmara algo que no era cierto). El indicador es la orden diferida, no la comparacion de
+        // valores: el mando escribe las dos copias a la vez y compararlas no distinguiria nada.
+        const char *txEstado = (deferredAction == NAVA_DEFERRED_LORA_CHANGE) ? "PENDIENTE REINICIO" : "ACT";
+        // V5.3: el 0 del protocolo NO son 0 dBm: es "por defecto de la region", o sea la potencia MAXIMA.
+        // Si el valor guardado es ese 0 (config antigua o puesta por la app), el estado no puede decir
+        // "0dBm" porque seria mentira.
+        if ((int)config.lora.tx_power == 0)
+            snprintf(buf, sizeof(buf),
+                     "TXPWR %s: SIN FIJAR (EL 0 ES EL MAXIMO DE LA REGION). USO: set_txpower [-5..-1|1-%d|auto]", txEstado,
+                     NAVA_MAX_TX);
+        else
+            snprintf(buf, sizeof(buf),
+                     "TXPWR %s: %ddBm (-5..-1 o 1-%d; auto=max, tambien def/default). USO: set_txpower [-5..-1|1-%d|auto]",
+                     txEstado, (int)config.lora.tx_power, NAVA_MAX_TX, NAVA_MAX_TX);
         return buf;
     }
     if (topic == "set_hops") {

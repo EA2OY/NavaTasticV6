@@ -256,6 +256,19 @@ https://github.com/brad112358/easy_E22
 #define TX_GAIN_LORA 22 // 8 for E22 900M30S, 25 for 900M33S, 22 for 3.7V battery powered 900M33S,  0 for 900M22S
 #endif
 
+// NAVARICO-V6 (bloque 2 del portaje V5.3): TOPE DE MANDO de la potencia, el que anuncia y acepta
+// `set_txpower`. NO es el limite fisico de la radio (ese lo pone SX126X_MAX_POWER).
+// OJO: esta linea esta en la rama #ifndef EASYPROMICRO, que es la que usan NUESTROS envs. La rama
+// EasyProMicro (env nrf52_promicro_diy-easypromicro, que no compilamos) es la que lleva
+// SX126X_MAX_POWER 8 "para no dañar el E22_900M33S": no aplica a nuestra placa.
+// Valor por radio, igual que en NavaTastic V5.1 (E22P 12 / HT-RA62 SX1262 22), para que los dos
+// firmwares acepten exactamente los mismos valores.
+#ifdef NAVARICO_RADIO_E22P
+#define NAVA_MAX_TX_POWER_DBM 12 // E22P: el maximo que el usuario puede configurar
+#else
+#define NAVA_MAX_TX_POWER_DBM 22 // HT-RA62 / SX1262
+#endif
+
 // #define SX126X_MAX_POWER 8 // set this if using a high-power board!
 
 /*
