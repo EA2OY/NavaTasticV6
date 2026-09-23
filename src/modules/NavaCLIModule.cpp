@@ -3092,7 +3092,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, usageAndState(topic), true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel,
-                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_url / panic / panic_ok\n[E] mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <comando>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
+                "CMDS:\n[Q] ping / status / env / channel / peers / bat / power\n[Q] rxlog / afc / reset_reason / noise / stats / log\n[E] ch_ls / ch_set / ch_del / ch_url / set_cli_chan / navadmin_mute / ch_reset\n[E] ch_mqtt / set_ok_to_mqtt / set_pos / set_pos_tx / set_nodeinfo_tx / set_telem_tx / pos_clear\n[E] set_preset / set_url / panic / panic_ok\n[E] mute / set_pin / test_tx / set_chem / set_vbat / set_vwake / storm / txoff / txon / ble\n[E] msg / bell / pos / nodeinfo / sendtel / fav / ign / db_purge / db_clear\n[E] set_name / set_role / set_rebroadcast / set_mqtt / set_tz / set_hops / set_txpower\n[E] sleepmsg / reboot / factory_reset / full_reset / wipe / admin_ls / keys_ls / keys_clear\n\nAYUDA: /nava help <cmd>\nDIR: ![ID] / @[r/c/a] / @name:[pref]", true, false, hops);
         }
     }
     else if (cmd == "ping") {
@@ -5599,7 +5599,7 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     if (topic == "ping")
         return "ping: Comprueba la latencia del repetidor. Uso: /nava ping";
     else if (topic == "status")
-        return "status: Estado del repetidor: firmware, nodos RAM, favoritos, bateria y FR (restablecimientos de fabrica sufridos). Uso: /nava status";
+        return "status: Estado: firmware, nodos RAM, favoritos, bateria y FR. Uso: /nava status";
     else if (topic == "env")
         return "env: Telemetria del nodo: bateria, heap, temperatura CPU y sensores I2C. Uso: /nava env";
     else if (topic == "channel")
@@ -5611,54 +5611,54 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "afc")
         return "afc: Deriva de frecuencia del TCXO en Hz del ultimo paquete. Uso: /nava afc";
     else if (topic == "reset_reason")
-        return "reset_reason: Motivo del ultimo reinicio del chip + FR (veces restablecido a fabrica). Uso: /nava reset_reason";
+        return "reset_reason: Motivo del ultimo reinicio + FR. Uso: /nava reset_reason";
     else if (topic == "route")
         return "route: Muestra a cuantos saltos y con que SNR escucha al nodo indicado. Uso: /nava route !ID";
     else if (topic == "trace")
-        return "trace: Lanza un trazado de ruta nativo hacia el nodo indicado desacoplado en 8s. Uso: /nava trace !ID";
+        return "trace: Trazado de ruta hacia el nodo indicado (8s). Uso: /nava trace !ID";
     else if (topic == "noise")
         return "noise: Piso de ruido instantaneo del chip de radio. Uso: /nava noise";
     else if (topic == "power")
-        return "power: Metricas de energia: ADC interno + INA219 (V, +-mA, CARGANDO/DESCARGANDO, mW). Uso: /nava power";
+        return "power: Energia: ADC + INA219 (V, mA, mW). Uso: /nava power";
     else if (topic == "bat")
         return "bat: Estado de bateria: quimica activa, voltaje, % OCV y estado TX. Uso: /nava bat";
     else if (topic == "ch_ls")
         return "ch_ls: Lista los 8 slots de canales (0-7), rol, nombre, tipo de clave y MQTT. Uso: /nava ch_ls";
     else if (topic == "ch_set")
-        return "ch_set: Configura canal primario (slot 0) o secundario (slots 2-7). Uso: /nava ch_set <slot 0|2-7> <nombre> <psk_base64>";
+        return "ch_set: Configura canal 0 o secundario 2-7. Uso: /nava ch_set <slot 0|2-7> <nombre> <psk_base64>";
     else if (topic == "ch_del")
         return "ch_del: Deshabilita el canal del slot seleccionado. Uso: /nava ch_del <slot 2-7>";
     else if (topic == "ch_url")
-        return "ch_url: Genera la URL oficial de canales. Uso: /nava ch_url [slot 0-7|all] (all = espejo completo del nodo)";
+        return "ch_url: URL oficial de canales. Uso: /nava ch_url [slot 0-7|all] (all = espejo del nodo)";
     else if (topic == "set_cli_chan")
-        return "set_cli_chan: Redirige escucha de NavaCLI y avisos solares al slot elegido. Uso: /nava set_cli_chan [slot 1-7]";
+        return "set_cli_chan: Redirige NavaCLI y avisos solares al slot elegido. Uso: /nava set_cli_chan [slot 1-7]";
     else if (topic == "navadmin_mute")
-        return "navadmin_mute: Silencia o reactiva el Canal 1 publico Navadmin. Uso: /nava navadmin_mute [on|off]";
+        return "navadmin_mute: Silencia/reactiva el Canal 1 publico Navadmin. Uso: /nava navadmin_mute [on|off]";
     else if (topic == "ch_reset")
         return "ch_reset: Restaura configuracion de fabrica de canales (Navadmin Slot 1). Uso: /nava ch_reset";
     else if (topic == "ch_mqtt")
         return "ch_mqtt: Configura la compuerta MQTT por canal. Uso: /nava ch_mqtt <slot 0-7> [up|down|both|off]";
     else if (topic == "set_ok_to_mqtt")
-        return "set_ok_to_mqtt: Autoriza a pasarelas ajenas a subir paquetes del nodo a internet. Uso: /nava set_ok_to_mqtt [on|off]";
+        return "set_ok_to_mqtt: Autoriza a pasarelas ajenas a subir paquetes a internet. Uso: /nava set_ok_to_mqtt [on|off]";
     else if (topic == "set_pos")
         return "set_pos: Fija coordenadas GPS estaticas en el repetidor. Uso: /nava set_pos <lat> <lon> [alt]";
     else if (topic == "pos_clear")
-        return "pos_clear: Borra las coordenadas fijas guardadas dejando el nodo sin posicion. Uso: /nava pos_clear";
+        return "pos_clear: Borra las coordenadas fijas. Uso: /nava pos_clear";
     else if (topic == "set_pos_tx")
-        return "set_pos_tx: Controla la difusion periodica de posicion de flota. Uso: /nava set_pos_tx [on|off|minutos]";
+        return "set_pos_tx: Difusion periodica de posicion. Uso: /nava set_pos_tx [on|off|minutos]";
     else if (topic == "set_nodeinfo_tx")
-        return "set_nodeinfo_tx: Controla la difusion periodica de NodeInfo/nombres de flota. Uso: /nava set_nodeinfo_tx [on|off|minutos]";
+        return "set_nodeinfo_tx: Difusion periodica de NodeInfo. Uso: /nava set_nodeinfo_tx [on|off|minutos]";
     else if (topic == "set_telem_tx")
-        return "set_telem_tx: Controla la emision de telemetria (default 12h). Cambia los 5 tipos a la vez; desde la App oficial puedes poner intervalos distintos por tipo (NAV8). Uso: /nava set_telem_tx [on(12h)|off|minutos]";
+        return "set_telem_tx: Telemetria (12h). Los 5 tipos a la vez. Uso: /nava set_telem_tx [on(12h)|off|minutos]";
     else if (topic == "set_preset")
-        return "set_preset: Cambia el modem preset LoRa estandar y reinicia. Uso: /nava set_preset [long_fast|medium_fast|short_fast|long_slow|short_slow|medium_slow|long_moderate|short_turbo]";
+        return "set_preset: Cambia el preset LoRa y reinicia. Uso: /nava set_preset [long_fast|medium_fast|short_fast|long_slow|short_slow|medium_slow|long_moderate|short_turbo]";
     else if (topic == "set_url")
         return "set_url: Aplica los canales y la radio que vengan en una URL de meshtastic.org (reemplaza el juego "
                "completo; el canal de rescate no se toca). Uso: /nava set_url <enlace>";
     else if (topic == "set_lora" || topic == "set_freq")
         return "set_lora/set_freq: COMANDO RETIRADO. La modulacion se cambia con set_preset y la red completa con set_url";
     else if (topic == "panic")
-        return "panic: Evacuacion coordinada de emergencia. SOLO DM PKI o canal privado (bloqueado en Navadmin). Uso: /nava panic <preset|sfnarrow> [minutos=10] [rollback_mins=0]";
+        return "panic: Evacuacion. SOLO DM PKI o canal privado. Uso: /nava panic <preset|sfnarrow> [min] [rollback_min]";
     else if (topic == "panic_ok")
         return "panic_ok: Consolida el salto de evacuacion cancelando el rollback. SOLO DM PKI o canal privado. Uso: /nava panic_ok";
     else if (topic == "mute")
@@ -5669,21 +5669,21 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "stats")
         return "stats: Informe de rendimiento y extremos del uptime (100% RAM). Uso: /nava stats";
     else if (topic == "test_tx")
-        return "test_tx: Emite una rafaga periodica de prueba (1 pkt/s) para medir senal. Uso: /nava test_tx [segundos 5-30]";
+        return "test_tx: Rafaga de prueba (1 pkt/s) para medir senal. Uso: /nava test_tx [segundos 5-30]";
     else if (topic == "log")
         return "log: Muestra las ultimas lineas del buffer circular de eventos en RAM. Uso: /nava log [lineas]";
     else if (topic == "fav")
-        return "fav: Gestiona favoritos (nodos con bypass de saltos). Uso: /nava fav add !ID | fav rm !ID | fav ls | fav auto [on|off]";
+        return "fav: Favoritos (bypass de saltos). Uso: /nava fav add !ID | fav rm !ID | fav ls | fav auto [on|off]";
     else if (topic == "ign")
         return "ign: Bloquea/desbloquea nodos (spam/sabotaje). Uso: /nava ign add !ID | ign rm !ID | ign ls";
     else if (topic == "set_chem")
-        return "set_chem: Cambia la quimica y ajusta corte/OCV/LPCOMP. Uso: /nava set_chem [lipo|nimh|sodium|lifepo4]";
+        return "set_chem: Quimica: ajusta corte/OCV/LPCOMP. Uso: /nava set_chem [lipo|nimh|sodium|lifepo4]";
     else if (topic == "set_vbat")
         return "set_vbat: Corte de apagado por bateria baja. Uso: /nava set_vbat [2400-3600] mV";
     else if (topic == "set_vwake")
-        return "set_vwake: Nivel LPCOMP de reencendido solar. 1=2.1V, 2=2.5V, 3=3.7V, 4=4.5V, 5=3.3V. Uso: /nava set_vwake [1-5]";
+        return "set_vwake: Nivel de reencendido solar: 1=2.1V 2=2.5V 3=3.7V 4=4.5V 5=3.3V. Uso: /nava set_vwake [1-5]";
     else if (topic == "storm")
-        return "storm: Hibernacion con radio apagada (ventana de 60s antes de dormir). Uso: /nava storm [1-720]h | storm test1 (60s) | storm test2 (120s)";
+        return "storm: Hibernacion con radio apagada (ventana 60s). Uso: /nava storm [1-720]h | test1 | test2";
     else if (topic == "txoff")
         return "txoff: Apaga la transmision LoRa tras vaciar cola (mantiene la escucha RX). Uso: /nava txoff";
     else if (topic == "txon")
@@ -5701,11 +5701,11 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "sendtel")
         return "sendtel: Transmite las telemetrias ambientales de los sensores I2C. Uso: /nava sendtel";
     else if (topic == "set_name")
-        return "set_name: Fija el nombre largo/corto persistente a resets en resilience.bin o vuelve al modo natural. Uso: /nava set_name \"Nombre Largo\" \"Corto\" | /nava set_name flush";
+        return "set_name: Fija el nombre largo/corto (persiste a resets), o vuelve al natural. Uso: /nava set_name \"Nombre Largo\" \"Corto\" | /nava set_name flush";
     else if (topic == "set_role")
         return "set_role: Cambia el rol del nodo. Uso: /nava set_role [client|mute|router]";
     else if (topic == "set_rebroadcast")
-        return "set_rebroadcast: Modo de retransmision (all|local|known|core|none). Persiste y sobrevive a resets. Uso: /nava set_rebroadcast [all|local|known|core|none]";
+        return "set_rebroadcast: Modo de retransmision. Persiste a resets. Uso: /nava set_rebroadcast [all|local|known|core|none]";
     else if (topic == "set_mqtt")
         return "set_mqtt: Activa/desactiva MQTT. Uso: /nava set_mqtt [on|off]";
     else if (topic == "set_tz")
@@ -5729,19 +5729,19 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "reboot")
         return "reboot: Programa un reinicio limpio del nodo (tras vaciar cola). Uso: /nava reboot";
     else if (topic == "factory_reset")
-        return "factory_reset: Formateo remoto de emergencia; restaura valores de rescate. Uso: /nava factory_reset";
+        return "factory_reset: Formateo remoto de emergencia. Uso: /nava factory_reset";
     else if (topic == "full_reset")
-        return "full_reset: Reset completo (config + semi-persistentes a defaults) conservando claves PKI y bonds BLE. Uso: /nava full_reset CONFIRM";
+        return "full_reset: Reset completo (config + semi-persistentes) conservando PKI y bonds BLE. Uso: /nava full_reset CONFIRM";
     else if (topic == "wipe")
-        return "wipe: Purga total: regenera el par PKI (los peers fallan DM hasta re-aprender la clave nueva). Uso: /nava wipe CONFIRM";
+        return "wipe: Purga total: regenera el par PKI (los peers no podran DM hasta re-aprender). Uso: /nava wipe CONFIRM";
     else if (topic == "admin_ls")
         return "admin_ls: Muestra las 3 claves criptograficas de admin en base64. Uso: /nava admin_ls";
     else if (topic == "keys_ls")
-        return "keys_ls: Muestra las claves admin persistidas (sobreviven a factory/full reset) en base64. Uso: /nava keys_ls";
+        return "keys_ls: Claves admin persistidas (sobreviven a reset) en base64. Uso: /nava keys_ls";
     else if (topic == "keys_clear")
-        return "keys_clear: Borra las claves admin persistidas (no toca la config actual ni reinicia). Uso: /nava keys_clear";
+        return "keys_clear: Borra las claves admin persistidas (no reinicia). Uso: /nava keys_clear";
     else if (topic == "sleepmsg")
-        return "sleepmsg: Activa/desactiva los avisos de sueno/vivo/listo al canal Navadmin. Uso: /nava sleepmsg [on|off]";
+        return "sleepmsg: Avisos de sueno/vivo/listo al canal Navadmin. Uso: /nava sleepmsg [on|off]";
     else if (topic == "help")
         return "help: Muestra la lista de comandos o ayuda de uno concreto. Uso: /nava help [comando]";
     return "Comando no reconocido. Escribe /nava help para ver la lista.";

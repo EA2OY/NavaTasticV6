@@ -20,7 +20,7 @@ MEMORY
    * DEJO DE ARRANCAR. La cuenta de direcciones cuadraba (app hasta 0xEC600, LittleFS en 0xED000,
    * bootloader en 0xF4000) y el build pasaba el guard, pero **0xEC000-0xED000 NO es territorio libre**.
    * REVERTIDO. **NO VOLVER A SUBIR ESTE TOPE SIN BANCO DELANTE.** */
-  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xEC000 - 0x26000
+  FLASH (rx)     : ORIGIN = 0x26000, LENGTH = 0xEA000 - 0x26000
 
   /* SRAM required by Softdevice depend on
    * - Attribute Table Size (Number of Services and Characteristics)

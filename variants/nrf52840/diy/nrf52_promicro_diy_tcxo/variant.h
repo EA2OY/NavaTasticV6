@@ -87,10 +87,14 @@ https://github.com/brad112358/easy_E22
 #define BATTERY_SENSE_RESOLUTION 4096.0
 // Definition of milliVolt per LSB => 3.0V ADC range and 12-bit ADC resolution = 3000mV/4096
 #define VBAT_MV_PER_LSB (0.73242188F)
-// Voltage divider value => 1.5M + 1M voltage divider on VBAT = (1.5M / (1M + 1.5M))
-#define VBAT_DIVIDER (0.6F)
-// Compensation factor for the VBAT divider
-#define VBAT_DIVIDER_COMP (1.73)
+// NAVARICO-V6 (23/09): ESTA PLACA LLEVA DIVISOR 1M/1M (factor 0.5), NO el 1.5M+1M (0.6) que trae de
+// fabrica la variante de 2.8 para OTRO montaje. Con el valor de fabrica (1.73) la tension se leia un
+// 13,5% POR DEBAJO de la real y el porcentaje de bateria se caia a 0.
+// El valor correcto es el que usa NavaTastic V5.3 en esta misma placa: 2.0. Verificado linea a linea
+// contra su variante: el resto de campos del ADC (canal, AREF 3.0, 12 bits, OCV) ya coincidian.
+#define VBAT_DIVIDER (0.5F)
+// Compensation factor for the VBAT divider (1 / 0.5 = 2.0)
+#define VBAT_DIVIDER_COMP 2.0
 // Fixed calculation of milliVolt from compensation value
 #define REAL_VBAT_MV_PER_LSB (VBAT_DIVIDER_COMP * VBAT_MV_PER_LSB)
 #undef AREF_VOLTAGE
