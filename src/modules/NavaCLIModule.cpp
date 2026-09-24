@@ -4276,14 +4276,34 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         }
 
         startPanic(pulse);
-        char respBuf[120];
-        snprintf(respBuf, sizeof(respBuf), "OK: PROTOCOLO DE PANICO INICIADO. EVACUACION EN %u MINUTOS...", (unsigned int)mins);
+        // V5.3 (portado 24/09/2026): si la consola vive en el canal PUBLICO, la cascada de flota NO
+        // sale, porque los pulsos solo viajan por el canal privado (emitPanicPulse retorna sin emitir
+        // si cliChannelSlot < 2). Antes se contestaba "PANICO INICIADO" igualmente: el nodo AFIRMABA
+        // que la evacuacion estaba en marcha cuando no habia salido ni un pulso. En una evacuacion
+        // real, que el operador no se entere por las malas es grave.
+        char respBuf[150];
+        if (prefs.cliChannelSlot < 2)
+            snprintf(respBuf, sizeof(respBuf),
+                     "OK: PANICO INICIADO (EVACUACION EN %u MIN). AVISO: SIN CASCADA: CONSOLA EN CANAL 1, MUEVELA A 2..7",
+                     (unsigned int)mins);
+        else
+            snprintf(respBuf, sizeof(respBuf), "OK: PROTOCOLO DE PANICO INICIADO. EVACUACION EN %u MINUTOS...",
+                     (unsigned int)mins);
         enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
     }
     else if (cmd.rfind("mute", 0) == 0) {
         std::string arg = (cmd.length() > 4) ? cmd.substr(4) : "";
         while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
         if (arg.empty() || arg == "off" || arg == "0") {
+            // V5.3 (portado 24/09/2026): el off cancela TAMBIEN la orden de mute ya ARMADA. Antes solo
+            // limpiaba el temporizador, asi que al vencer la ventana de gracia de 60 s el mute se
+            // volvia a armar SOLO y el nodo se quedaba sordo igual: el operador creia haberlo cancelado
+            // y no era verdad. El caso tipico es mandar "mute 5" y arrepentirse dentro del minuto.
+            if (deferredAction == NAVA_DEFERRED_MUTE) {
+                deferredAction = NAVA_DEFERRED_NONE;
+                preRebootArmed = false;
+                mutePendingMinutes = 0;
+            }
             muteUntilMs = 0;
             logEvent("MUTE OFF");
             enqueueResponse(replyDest, replyChannel, "OK: MUTE DESACTIVADO (Servicio Normal)", true, false, hops);
