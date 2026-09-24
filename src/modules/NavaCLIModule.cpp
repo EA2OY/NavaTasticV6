@@ -3421,7 +3421,10 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             out += buf;
         }
         char tail[80];
-        snprintf(tail, sizeof(tail), "CLI: Slot %d | Navadmin: %s", prefs.cliChannelSlot, prefs.navadminMuted ? "MUTED" : "ACTIVO");
+        uint8_t cliTail = prefs.cliChannelSlot;
+        if (cliTail < 1 || cliTail > 7) cliTail = 1;
+        snprintf(tail, sizeof(tail), "CLI: Slot %d | Navadmin: %s", prefs.cliChannelSlot,
+                 prefs.navadminMuted ? (cliTail == 1 ? "MUTED SIN EFECTO (ARMADO)" : "MUTED") : "ACTIVO");
         out += tail;
         enqueueResponse(replyDest, replyChannel, out, true, false, hops);
     }
@@ -3534,7 +3537,11 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             enqueueResponse(replyDest, replyChannel, "ERR: SLOT INVALIDO (SOLO 2-7)", true, false, hops);
             return;
         }
-        if (prefs.cliChannelSlot == slot) {
+        // V5.3: si el hueco que se borra es el de la consola, la consola vuelve al canal 1 y el silencio
+        // del canal publico pasa a estar armado sin efecto. Antes se hacia en silencio: el operador se
+        // quedaba sin saber por que el nodo volvia a contestar en el canal 1.
+        bool eraConsola = (prefs.cliChannelSlot == slot);
+        if (eraConsola) {
             prefs.cliChannelSlot = 1;
         }
         meshtastic_Channel ch = meshtastic_Channel_init_zero;
@@ -3550,7 +3557,12 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         logEvent("CH_DEL slot %d", slot);
         char respBuf[60];
         snprintf(respBuf, sizeof(respBuf), "OK: CANAL %d DESHABILITADO", slot);
-        enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
+        std::string resp = respBuf;
+        if (eraConsola) {
+            resp += prefs.navadminMuted ? ". AVISO: LA CONSOLA VUELVE AL CANAL 1 Y EL SILENCIO DEJA DE TENER EFECTO"
+                                        : ". AVISO: LA CONSOLA VUELVE AL CANAL 1";
+        }
+        enqueueResponse(replyDest, replyChannel, resp, true, false, hops);
     }
     else if (cmd.rfind("ch_url", 0) == 0) {
         std::string arg = (cmd.length() > 6) ? cmd.substr(6) : "";
@@ -3911,8 +3923,20 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         if (arg == "on" || arg == "1") {
             prefs.navadminMuted = 1;
             saveResiliencePrefs();
-            logEvent("NAVADMIN MUTE ON");
-            enqueueResponse(replyDest, replyChannel, "OK: NAVADMIN (CANAL 1) SILENCIADO", true, false, hops);
+            // V5.3: avisar tambien de que queda ARMADO cuando la consola vive en el canal 1.
+            uint8_t cliNow = prefs.cliChannelSlot;
+            if (cliNow < 1 || cliNow > 7) cliNow = 1;
+            logEvent(cliNow == 1 ? "NAVADMIN MUTE ON (ARMADO, CONSOLA EN CH1)" : "NAVADMIN MUTE ON");
+            char respBuf[120];
+            // V5.3: se silencian los COMANDOS y RESPUESTAS del canal 1; el resto del trafico sigue igual.
+            if (cliNow == 1)
+                enqueueResponse(replyDest, replyChannel,
+                                "OK: NAVADMIN MUTE ON ARMADO SIN EFECTO: TU CONSOLA ES EL CANAL 1. MUEVELA CON set_cli_chan 2..7",
+                                true, false, hops);
+            else {
+                snprintf(respBuf, sizeof(respBuf), "OK: CANAL 1 SILENCIADO (COMANDOS Y RESPUESTAS). CONSOLA EN SLOT %d", cliNow);
+                enqueueResponse(replyDest, replyChannel, respBuf, true, false, hops);
+            }
         } else if (arg == "off" || arg == "0") {
             prefs.navadminMuted = 0;
             saveResiliencePrefs();
@@ -5776,7 +5800,8 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "set_cli_chan")
         return "set_cli_chan: Redirige NavaCLI y avisos solares al slot elegido. Uso: /nava set_cli_chan [slot 1-7]";
     else if (topic == "navadmin_mute")
-        return "navadmin_mute: Silencia/reactiva el Canal 1 publico Navadmin. Uso: /nava navadmin_mute [on|off]";
+        return "navadmin_mute: Deja de atender comandos y respuestas en el Canal 1 publico (el reenvio no se "
+               "toca). Sin efecto si tu consola es el canal 1. Uso: /nava navadmin_mute [on|off]";
     else if (topic == "ch_reset")
         return "ch_reset: Restaura configuracion de fabrica de canales (Navadmin Slot 1). Uso: /nava ch_reset";
     else if (topic == "ch_mqtt")
@@ -5912,7 +5937,18 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         return buf;
     }
     if (topic == "navadmin_mute") {
-        snprintf(buf, sizeof(buf), "NAVADMIN MUTE: %s. USO: navadmin_mute [on|off]", prefs.navadminMuted ? "ON" : "OFF");
+        // V5.3: con la consola en el canal 1 el silencio queda ARMADO pero no se aplica: el canal de la
+        // consola nunca se silencia.
+        uint8_t cliNow = prefs.cliChannelSlot;
+        if (cliNow < 1 || cliNow > 7) cliNow = 1;
+        if (!prefs.navadminMuted)
+            snprintf(buf, sizeof(buf), "NAVADMIN MUTE: OFF (CONSOLA SLOT %d). USO: navadmin_mute [on|off]", cliNow);
+        else if (cliNow == 1)
+            snprintf(buf, sizeof(buf),
+                     "NAVADMIN MUTE: ARMADO SIN EFECTO (TU CONSOLA ES EL CANAL 1). USO: navadmin_mute [on|off]");
+        else
+            snprintf(buf, sizeof(buf),
+                     "NAVADMIN MUTE: ON (CH1 SIN COMANDOS NI RESPUESTAS, CONSOLA SLOT %d). USO: navadmin_mute [on|off]", cliNow);
         return buf;
     }
     if (topic == "ch_mqtt") {
