@@ -32,8 +32,11 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
 
     /**
      * Send our position into the mesh
+     * forcedPrecision: 0 = comportamiento normal (la precision del canal). Distinto de 0 = el llamante
+     * IMPONE la precision; lo usa /nava pos para emitir aunque el canal no tenga la comparticion de
+     * posicion activada (en 2.8, precision 0 significa NO EMITIR NADA).
      */
-    void sendOurPosition(NodeNum dest, bool wantReplies = false, uint8_t channel = 0);
+    void sendOurPosition(NodeNum dest, bool wantReplies = false, uint8_t channel = 0, uint32_t forcedPrecision = 0);
     void sendOurPosition();
 
     /**

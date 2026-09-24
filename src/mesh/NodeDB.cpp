@@ -3135,16 +3135,44 @@ bool NodeDB::saveDeviceStateToDisk()
 
 bool NodeDB::saveNodeDatabaseToDisk()
 {
-#if defined(USERPREFS_NODEDB_RAM_ONLY) && USERPREFS_NODEDB_RAM_ONLY
-    // NAVARICO-V6 (RAM-only): la base de nodos es dato AUTOMATICO de malla y no se escribe en
-    // flash (norma D4 del proyecto). Se devuelve true sin escribir: el llamante no debe tratarlo
-    // como fallo (un false dispara reintentos y puede acabar en formateo del sistema de ficheros).
-    // Contrapartida: tras un reinicio la lista de nodos empieza vacia y se repuebla sola oyendo
-    // la malla. Los ESP32 no se ven afectados por este camino (alli la persistencia de nodos ya
-    // esta desactivada de serie).
-    LOG_DEBUG("NodeDB: RAM-only (USERPREFS_NODEDB_RAM_ONLY), no se guarda la base de nodos");
-    return true;
-#else
+    // V5.3 (portado 24/09/2026): "RAM-only" NO puede significar "no se guarda NADA". En 2.7.26 la
+    // clave USERPREFS_NODEDB_RAM_ONLY del perfil era INERTE (no la leia nadie), asi que V5.3
+    // guardaba a flash un SUBCONJUNTO CRITICO de la NodeDB mediante un filtro. En 2.8 esa misma
+    // clave SI se lee y apagaba la persistencia por completo: favoritos, ignorados, routers
+    // directos, auto-favoritos y ADMINISTRADORES dejaban de sobrevivir a un reinicio.
+    // Aqui se conserva la intencion de la clave (no escribir la base ENTERA ni los satelites:
+    // eso es lo que desgasta la flash) pero SI se escriben los cinco grupos criticos, igual que
+    // en V5.3. La lista de "activos" de la flash se sigue dejando vacia mas abajo a proposito.
+    {
+        // Compactado EN EL SITIO (sin vector auxiliar: el temporal costaba mas bytes de codigo que
+        // el propio filtro en una placa que va al borde de la flash).
+        size_t destino = nodeDatabase.nodes.empty() ? 0 : 1; // el nodo local se queda siempre
+        for (size_t i = 1; i < numMeshNodes && i < nodeDatabase.nodes.size(); i++) {
+            const auto &node = nodeDatabase.nodes[i];
+            bool guardar = nodeInfoLiteIsFavorite(&node) ||               // favorito explicito o por clave admin
+                           nodeInfoLiteIsIgnored(&node) ||                // ignorado: debe seguir ignorado tras reiniciar
+                           isAdminNode(node);                             // administrador autorizado
+            if (!guardar && node.has_hops_away && node.hops_away == 0 && nodeInfoLiteHasUser(&node)) {
+                guardar = (node.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+                           node.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
+                           node.role == meshtastic_Config_DeviceConfig_Role_CLIENT_BASE);
+            }
+            if (!guardar && router != nullptr) {
+                const auto &adr = router->activeDirectRouters;
+                guardar = (std::find(adr.begin(), adr.end(), node.num) != adr.end());
+            }
+            if (guardar) {
+                if (destino != i) {
+                    nodeDatabase.nodes[destino] = node;
+                }
+                destino++;
+            }
+        }
+        nodeDatabase.nodes.resize(destino);
+    }
+    LOG_DEBUG("NodeDB: RAM-only, guardando solo nodos criticos (%u de %u)",
+              (unsigned)nodeDatabase.nodes.size(), (unsigned)numMeshNodes);
+
     // Don't persist the node DB until this device has a PKI keypair
     // TODO: revisit when https://github.com/meshtastic/firmware/pull/10478 lands
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
@@ -3258,7 +3286,6 @@ bool NodeDB::saveNodeDatabaseToDisk()
     warmStore.saveIfDirty();
 #endif
     return ok;
-#endif // USERPREFS_NODEDB_RAM_ONLY
 }
 
 bool NodeDB::saveToDiskNoRetry(int saveWhat)

@@ -431,7 +431,7 @@ bool PositionModule::sendOurPositionToPhone()
     return true;
 }
 
-void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t channel)
+void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t channel, uint32_t forcedPrecision)
 {
     if (!config.position.fixed_position && !nodeDB->hasLocalPositionSinceBoot()) {
         LOG_DEBUG("Skip position send; no fresh position since boot");
@@ -443,7 +443,11 @@ void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t cha
         service->cancelSending(prevPacketId);
 
     // Set the class precision value for this particular packet.
-    precision = getPositionPrecisionForChannel(channel);
+    // NAVARICO-V6 (24/09/2026): si el llamante impone una precision, manda esa. Lo usa /nava pos, que es
+    // una accion PEDIDA A PROPOSITO por el operador: en 2.8 la posicion es opt-in por canal y con
+    // precision 0 allocPositionPacket() devuelve nullptr, asi que el comando contestaba "ENVIADA" sin
+    // emitir nada. El resto de llamantes no pasa el parametro y conserva el comportamiento de 2.8.
+    precision = (forcedPrecision != 0) ? forcedPrecision : getPositionPrecisionForChannel(channel);
 
     meshtastic_MeshPacket *p = allocPositionPacket(precision);
     if (p == nullptr) {

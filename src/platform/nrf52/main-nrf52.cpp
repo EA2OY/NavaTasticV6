@@ -25,19 +25,10 @@ void setBleForceDisabled(bool on)
     bleForceDisabled = on;
 }
 
-// NAVARICO-V6 - PENDIENTE: modo tormenta (hibernacion con RTC2).
-// En NavaTastic V5.1 esta funcion duerme la radio de verdad, apaga BLE/pantalla/pin de radio y
-// cuenta con RTC2 en bloques hasta despertar o resetear. NO se ha portado todavia a proposito:
-// forma parte del bloque de ENERGIA y convive con el ciclo LPCOMP y el umbral de despertar, que son
-// lineas rojas del proyecto (no se tocan sin banco). Portarlo a medias seria peor que no tenerlo:
-// un nodo que se duerme y no despierta se queda mudo en el monte.
-// MIENTRAS TANTO: el comando /nava storm avisa y NO duerme. Se porta en el bloque de energia.
-void timedSystemSleepSeconds(uint32_t seconds)
-{
-    if (seconds == 0)
-        return;
-    LOG_WARN("Storm: NO PORTADO todavia (bloque de energia pendiente). No se duerme el nodo.");
-}
+// NAVARICO-V6 - MODO TORMENTA (hibernacion con RTC2): la funcion timedSystemSleepSeconds() vive mas
+// abajo, DEBAJO de todos los #include, porque necesita declaraciones que el framework nordic aporta
+// mas abajo en este fichero (nrf_rtc_*, screen, notifyDeepSleep, variant_shutdown). Ponerla aqui
+// arriba NO compila: fue el primer intento y fallo.
 #define NRFX_WDT_CONFIG_NO_IRQ 1
 #include "nrfx_power.h"
 #include <assert.h>
@@ -63,6 +54,130 @@ void timedSystemSleepSeconds(uint32_t seconds)
 #ifdef BQ25703A_ADDR
 #include "BQ25713.h"
 #endif
+
+// NAVARICO-V6 (storm): includes que V5.3 declaraba explicitamente para la hibernacion RTC2.
+// (2.8 no tenia NINGUNA linea de nrf_rtc_*: el RTC se porta completo con su manejador de IRQ.)
+#include <hal/nrf_rtc.h> // nrf_rtc_*, NRF_RTC_TASK_*, RTC_CHANNEL_INT_MASK
+#include "sleep.h"       // notifyDeepSleep, cpuDeepSleep
+#include "graphics/Screen.h" // screen->doDeepSleep() (el objeto `screen` lo declara este header)
+// Declaracion forward al estilo V5.3: variant_shutdown() se usa mas abajo en este fichero antes de su
+// declaracion weak (mas abajo aun), y cada placa pone la suya en su variant.cpp.
+// setBluetoothEnable() se DEFINE en este mismo fichero (L404) y cpuDeepSleep() la usa desde la L709,
+// pero la hibernacion del storm esta MAS ARRIBA: necesita verla antes.
+void variant_shutdown();
+void setBluetoothEnable(bool enable);
+
+// ---------------------------------------------------------------------------
+// NAVARICO-V6 - MODO TORMENTA: hibernacion temporizada (RTC2 + LOWPWR).
+// PORTADO de NavaTastic V5.3 (que lo tenia probado en campo) el 24/09/2026.
+//
+// Por que ASI y no con sd_power_system_off() (la razon esta escrita en el original y es la clave de
+// que esto sea seguro): System OFF solo despierta por GPIO/LPCOMP/NFC/reset fisico, NO por
+// temporizador; y con la bateria por encima del umbral del LPCOMP no habria flanco de subida, asi que
+// el nodo quedaria DORMIDO PARA SIEMPRE. Aqui se usa System ON en bajo consumo + RTC2 COMPARE.
+//
+// El contador del RTC es de 24 bits a 32768 Hz (~512 s maximo por comparacion), asi que el tiempo
+// pedido se cubre en bloques de 500 s re-armando el COMPARE en cada despertar.
+// Al cumplirse el total se hace NVIC_SystemReset(): el arranque restaura radio y perifericos.
+//
+// OJO (2.8): el cpuDeepSleep() de 2.8 NO tiene despertar por temporizador (su propio comentario dice
+// "FIXME, configure RTC or button press to wake us") y en todo el arbol de 2.8 no habia NI UNA linea
+// de nrf_rtc_*. Por eso el RTC2 se porta completo, con su manejador de interrupcion.
+// ---------------------------------------------------------------------------
+#define STORM_BLOCK_SECS 500u
+#define RTC_FREQ_HZ 32768u
+#define RTC_CC_MAX 0xFFFFFFu
+
+static volatile bool rtc2StormWake = false;
+
+extern "C" void RTC2_IRQHandler(void)
+{
+    if (nrf_rtc_event_check(NRF_RTC2, NRF_RTC_EVENT_COMPARE_0)) {
+        nrf_rtc_event_clear(NRF_RTC2, NRF_RTC_EVENT_COMPARE_0);
+        rtc2StormWake = true;
+    }
+}
+
+void timedSystemSleepSeconds(uint32_t seconds)
+{
+    if (seconds == 0)
+        return;
+
+    LOG_INFO("Storm: entrando en hibernacion RTC2 por %lu segundos", (unsigned long)seconds);
+
+    // 1. Dormir la RADIO de verdad: notifyDeepSleep dispara RadioInterface::sleep() (setStandby +
+    //    lora.sleep(keepConfig) en el SX1262). TIENE que ir ANTES de SPI.end(), porque el comando
+    //    SLEEP viaja por SPI. Sin esto la radio se queda en RX consumiendo ~10 mA.
+    notifyDeepSleep.notifyObservers(NULL);
+
+#ifdef HAS_WIRE
+    Wire.end();
+#endif
+    SPI.end();
+    if (Serial)
+        Serial.end();
+#ifdef PIN_SERIAL1_RX
+    if (Serial1)
+        Serial1.end();
+#endif
+    setBluetoothEnable(false);
+
+#ifdef RADIO_POWER_ENABLE_PIN
+    // Apagar el modulo de radio E22P entero (~40 mA durante toda la hibernacion). Solo lo tienen las
+    // placas con ese pin; el arranque posterior lo vuelve a levantar (nrf52Setup).
+    pinMode(RADIO_POWER_ENABLE_PIN, OUTPUT);
+    digitalWrite(RADIO_POWER_ENABLE_PIN, LOW);
+#endif
+
+    // Apagar pantalla (10 uA en sueno profundo)
+    if (screen) {
+        screen->doDeepSleep();
+    }
+
+    // Apagado especifico de la placa, igual que hace el cpuDeepSleep() de 2.8: cada variante puede
+    // tener perifericos que consuman y solo ella sabe como dejarlos.
+    variant_shutdown();
+
+    // 2. Configurar el RTC2 (LFCLK 32768 Hz, prescaler 0).
+    nrf_rtc_prescaler_set(NRF_RTC2, 0);
+    nrf_rtc_task_trigger(NRF_RTC2, NRF_RTC_TASK_CLEAR);
+    nrf_rtc_event_enable(NRF_RTC2, RTC_CHANNEL_INT_MASK(0));
+    nrf_rtc_int_enable(NRF_RTC2, RTC_CHANNEL_INT_MASK(0));
+    NVIC_ClearPendingIRQ(RTC2_IRQn);
+    NVIC_EnableIRQ(RTC2_IRQn);
+
+    uint32_t remaining = seconds;
+    while (remaining > 0) {
+        uint32_t block = (remaining > STORM_BLOCK_SECS) ? STORM_BLOCK_SECS : remaining;
+        uint32_t target = (nrf_rtc_counter_get(NRF_RTC2) + block * RTC_FREQ_HZ) & RTC_CC_MAX;
+
+        nrf_rtc_cc_set(NRF_RTC2, 0, target);
+        nrf_rtc_task_trigger(NRF_RTC2, NRF_RTC_TASK_CLEAR);
+        nrf_rtc_task_trigger(NRF_RTC2, NRF_RTC_TASK_START);
+
+        rtc2StormWake = false;
+
+        // Dormir la CPU hasta el COMPARE del RTC2. sd_app_evt_wait() es la API correcta con
+        // SoftDevice: deja que el stack gestione el sueno real. __WFE() despertaba la CPU en bucle
+        // por eventos internos del SoftDevice y anulaba el ahorro (documentado en el V5.3 original).
+        while (!rtc2StormWake) {
+            sd_power_mode_set(NRF_POWER_MODE_LOWPWR);
+            sd_app_evt_wait();
+        }
+
+        remaining -= block;
+    }
+
+    LOG_INFO("Storm: tiempo cumplido, reiniciando para restaurar la radio");
+
+    // 3. Apagar el RTC2 y reiniciar: el arranque restaura radio y perifericos.
+    nrf_rtc_task_trigger(NRF_RTC2, NRF_RTC_TASK_STOP);
+    NVIC_DisableIRQ(RTC2_IRQn);
+    NVIC_SystemReset();
+    while (1) {
+        delay(1000);
+    }
+}
 
 // WARNING! THRESHOLD + HYSTERESIS should be less than regulated VDD voltage - which depends on board
 // and is 3.0 or 3.3V. Also VDD likes to read values like 2.9999 so make sure you account for that

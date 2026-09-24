@@ -1436,6 +1436,20 @@ uint32_t RadioInterface::computeSlotTimeMsec()
  */
 void RadioInterface::limitPower(int8_t loraMaxPower)
 {
+    // V5.3 (portado 24/09/2026): TOPE DURO DE HARDWARE. `NAVA_MAX_TX_POWER_DBM` solo limita lo que
+    // ACEPTA el comando /nava set_txpower; este recorta CUALQUIER valor, incluido el que escriba la App
+    // desde el movil, y tambien el tope de la radio. Sin el, un E22P limitado a 12 dBm (Promicro y Xiao
+    // DIY) podia acabar emitiendo a 22. V5.3 lo tenia en las dos variantes y se perdio en el portaje:
+    // no existe en 2.8 upstream, es un añadido de NavaTastic.
+#ifdef HARDWARE_TX_POWER_LIMIT
+    if (config.lora.tx_power > HARDWARE_TX_POWER_LIMIT) {
+        config.lora.tx_power = HARDWARE_TX_POWER_LIMIT;
+    }
+    if (loraMaxPower > HARDWARE_TX_POWER_LIMIT) {
+        loraMaxPower = HARDWARE_TX_POWER_LIMIT;
+    }
+#endif
+
     uint8_t maxPower = 255; // No limit
 
     if (myRegion->powerLimit)

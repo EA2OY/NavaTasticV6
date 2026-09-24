@@ -269,8 +269,14 @@ https://github.com/brad112358/easy_E22
 // firmwares acepten exactamente los mismos valores.
 #ifdef NAVARICO_RADIO_E22P
 #define NAVA_MAX_TX_POWER_DBM 12 // E22P: el maximo que el usuario puede configurar
+// V5.3 (portado 24/09/2026): TOPE DURO de hardware. `NAVA_MAX_TX_POWER_DBM` solo limita lo que ACEPTA
+// el comando /nava set_txpower; este lo aplica RadioInterface::limitPower() a CUALQUIER valor, incluido
+// el que escriba la App desde el movil. Sin el, un E22P limitado a 12 dBm podia acabar emitiendo a 22.
+// V5.3 lo tenia y se perdio en el portaje (no existe en 2.8 upstream: es un añadido de NavaTastic).
+#define HARDWARE_TX_POWER_LIMIT 12
 #else
 #define NAVA_MAX_TX_POWER_DBM 22 // HT-RA62 / SX1262
+#define HARDWARE_TX_POWER_LIMIT 22
 #endif
 
 // #define SX126X_MAX_POWER 8 // set this if using a high-power board!

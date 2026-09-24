@@ -241,8 +241,13 @@ static const uint8_t SCK = PIN_SPI_SCK;
 // anunciaria un valor que la radio no deberia darte.
 #ifdef NAVARICO_RADIO_E22P
 #define NAVA_MAX_TX_POWER_DBM 12
+// V5.3 (portado 24/09/2026): TOPE DURO de hardware, igual que en el Promicro. `NAVA_MAX_TX_POWER_DBM`
+// solo limita lo que ACEPTA /nava set_txpower; este lo aplica RadioInterface::limitPower() a cualquier
+// valor, incluido el que escriba la App. V5.3 lo tenia y se perdio en el portaje.
+#define HARDWARE_TX_POWER_LIMIT 12
 #else
 #define NAVA_MAX_TX_POWER_DBM 22
+#define HARDWARE_TX_POWER_LIMIT 22
 #endif
 
 /*

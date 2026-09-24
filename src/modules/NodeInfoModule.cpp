@@ -155,14 +155,27 @@ meshtastic_MeshPacket *NodeInfoModule::allocReply()
         return NULL;
     }
 
+    // V5.3 (portado 24/09/2026): BYPASS DE ADMIN. Cuando el que pide es un administrador autorizado, el
+    // throttle de los 10 minutos NO se aplica. Es un parche PROPIO del fork (no existe en 2.7.26 ni en
+    // 2.8 upstream) y su motivo es este: /nava exige ser admin, asi que `nodeinfo` se pedia a proposito
+    // y el nodo contestaba "OK: NODEINFO ENVIADO" mientras el throttle lo tiraba en silencio. Un
+    // operador pidiendo la baliza de presentacion a mano quiere que salga AHORA.
+    bool is_admin = false;
+    if (currentRequest) {
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(getFrom(currentRequest));
+        if (n && nodeDB->isAdminNode(*n)) {
+            is_admin = true;
+        }
+    }
+
     // Use graduated scaling based on active mesh size (10 minute base, scales with congestion coefficient)
     uint32_t timeoutMs = Default::getConfiguredOrDefaultMsScaled(0, 10 * 60, nodeStatus->getNumOnline());
     uint32_t lastNodeInfo = transmitHistory ? transmitHistory->getLastSentToMeshMillis(meshtastic_PortNum_NODEINFO_APP) : 0;
-    if (!shorterTimeout && lastNodeInfo && Throttle::isWithinTimespanMs(lastNodeInfo, timeoutMs)) {
+    if (!is_admin && !shorterTimeout && lastNodeInfo && Throttle::isWithinTimespanMs(lastNodeInfo, timeoutMs)) {
         LOG_DEBUG("Skip send NodeInfo since we sent it <%us ago", timeoutMs / 1000);
         ignoreRequest = true; // Mark it as ignored for MeshModule
         return NULL;
-    } else if (shorterTimeout && lastNodeInfo && Throttle::isWithinTimespanMs(lastNodeInfo, 60 * 1000)) {
+    } else if (!is_admin && shorterTimeout && lastNodeInfo && Throttle::isWithinTimespanMs(lastNodeInfo, 60 * 1000)) {
         // For interactive/urgent requests (e.g., user-triggered or implicit requests), use a shorter 60s timeout
         LOG_DEBUG("Skip send NodeInfo since we sent it <60s ago");
         ignoreRequest = true;

@@ -12,6 +12,7 @@
 #include "sleep.h"
 #include "modules/TraceRouteModule.h"
 #include "modules/PositionModule.h"
+#include "mesh/PositionPrecision.h"
 #include "modules/NodeInfoModule.h"
 #include "mesh/RadioLibInterface.h"
 #include "buzz/buzz.h"
@@ -38,6 +39,12 @@
 
 // Variables y clases externas declaradas en otros ficheros
 extern float lastRxFrequencyError;
+
+// NAVARICO-V6 (24/09/2026): precision de posicion que usa /nava pos cuando NINGUN canal tiene la
+// comparticion de posicion activada. Es el valor que los propios perfiles traen escrito y comentado
+// (USERPREFS_CHANNEL_0_PRECISION "14", ~1 km). El comando es una accion PEDIDA por el operador, asi que
+// emite de verdad; la emision PERIODICA sigue dependiendo de la compuerta opt-in de 2.8.
+#define NAVA_POS_PRECISION_FORZADA 14
 #ifdef ARCH_NRF52
 extern uint32_t rawResetReason;
 extern void timedSystemSleepSeconds(uint32_t seconds);
@@ -701,6 +708,11 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
     ResiliencePrefs tmp;
     memset(&tmp, 0, sizeof(tmp));
     bool exists = false;
+    // Auditoria 15/09/2026 (F1): marca de "este fichero necesitaba saneado/migracion". NO se puede usar
+    // `tmp.version != NAVS_RESILIENCE_VERSION` para detectarlo, porque el bloque de saneado SOBRESCRIBE
+    // la version a la actual en sus dos ramas: la condicion seria siempre falsa y la guarda de abajo
+    // tiraria el saneado (dejando el fichero viejo intacto -> Clean Slate -> reset de fabrica).
+    bool sanitized = false;
     // Auditoria 26/08: blindado con spiLock (colision SPI con la radio LoRa, mismo patron NAV7)
     concurrency::LockGuard g(spiLock);
     if (FSCom.exists("/resilience.bin")) {
@@ -712,6 +724,7 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
                 if (tmp.magic == 0x52455349) {
                     exists = true;
                     if (fileSize != sizeof(tmp) || tmp.version != NAVS_RESILIENCE_VERSION) {
+                        sanitized = true;
                         tmp.autoFavCount = 0;
                         memset(tmp.autoFavIds, 0, sizeof(tmp.autoFavIds));
                         tmp.sleepMsgs = 1;
@@ -746,7 +759,7 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
                         } else {
                             // NAV9: fichero corrupto/ajeno -> BP + despliegue pendiente
                             tmp.deploy_done = 0;
-                            tmp.rebroadcast_mode = 1;
+                            tmp.rebroadcast_mode = 2; // LOCAL_ONLY (H17d 15/09/2026: ponia 1=ALL_SKIP_DECODING, que retransmite MAS de lo que dicen los 16 perfiles)
                             tmp.pos_configured = 1;
                             tmp.nodeinfo_configured = 1;
                             tmp.telem_configured = 1;
@@ -805,12 +818,21 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
         tmp.ignoredCount = 0;
         memset(tmp.ignoredNodes, 0, sizeof(tmp.ignoredNodes));
         // NAV9: BP de primera instalacion (despliegue completo pendiente en el primer tick)
-        tmp.rebroadcast_mode = 1;
+        tmp.rebroadcast_mode = 2; // LOCAL_ONLY (H17d 15/09/2026: ponia 1=ALL_SKIP_DECODING, que retransmite MAS de lo que dicen los 16 perfiles)
         tmp.pos_configured = 1;
         tmp.nodeinfo_configured = 1;
         tmp.telem_configured = 1;
         tmp.deploy_done = 0;
         tmp.version = NAVS_RESILIENCE_VERSION;
+    }
+    // GUARDA 1 (V5.3 F1, portada 24/09/2026): si el valor YA es el correcto, no reescribir. Sin esto el
+    // pre-check reescribia /resilience.bin ENTERO en cada arranque con bateria baja (varias veces al dia
+    // en invierno). Solo vale si el fichero NO necesita nada mas: si falta, o si traia migracion/saneado
+    // pendiente, HAY que escribir aunque wasInSleep no cambie (si no se tirarian el saneado y la
+    // migracion NAV8, que es el unico rescate que les queda).
+    bool coherenceNeeded = (!exists || sanitized);
+    if (!coherenceNeeded && tmp.wasInSleep == (on ? 1 : 0)) {
+        return;
     }
     // GUARDA DE POTENCIA (V5.3, portada 24/09/2026): no escribir con la alimentacion en un nivel
     // inseguro. Esta funcion se ejecuta JUSTO cuando la bateria esta por debajo del corte, o sea en el
@@ -2282,7 +2304,7 @@ void NavaCLIModule::navaFullResetKeepKeys()
     memset(prefs.ignoredNodes, 0, sizeof(prefs.ignoredNodes));
     // NAV9: full_reset es una catastrofe CONTROLADA -> BP de nuevo; el nodo ya estaba
     // desplegado (deploy_done=1) asi que no se re-despliega config en el siguiente boot.
-    prefs.rebroadcast_mode = 1;
+    prefs.rebroadcast_mode = 2; // LOCAL_ONLY (H17d 15/09/2026: ponia 1=ALL_SKIP_DECODING, que retransmite MAS de lo que dicen los 16 perfiles)
     prefs.pos_configured = 1;
     prefs.nodeinfo_configured = 1;
     prefs.telem_configured = 1;
@@ -4124,7 +4146,17 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         saveResiliencePrefs();
 
         if (positionModule) {
-            positionModule->sendOurPosition(NODENUM_BROADCAST, false);
+            // NAVARICO-V6 (24/09/2026): mismo caso que /nava pos. Aqui el operador ACABA de fijar la
+            // posicion y espera que salga; sin resolver el canal y la precision, 2.8 no emitia nada.
+            uint8_t posChan = 0;
+            if (!findPositionChannel(posChan)) {
+                posChan = (replyChannel < channels.getNumChannels()) ? replyChannel : 0;
+            }
+            uint32_t posPrec = getPositionPrecisionForChannel(posChan);
+            if (posPrec == 0) {
+                posPrec = NAVA_POS_PRECISION_FORZADA;
+            }
+            positionModule->sendOurPosition(NODENUM_BROADCAST, false, posChan, posPrec);
         }
 
         logEvent("SET_POS Lat:%.4f Lon:%.4f", lat, lon);
@@ -4824,6 +4856,10 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
     }
     else if (cmd.rfind("storm", 0) == 0) {
 #ifdef ARCH_NRF52
+        // NAVARICO-V6 (24/09/2026): LA HIBERNACION YA ESTA PORTADA. timedSystemSleepSeconds() duerme la
+        // radio, BLE, pantalla y (si la placa lo tiene) la alimentacion del modulo E22P, cuenta con RTC2
+        // en bloques de 500 s y reinicia al cumplirse el tiempo. Portado de NavaTastic V5.3, que lo tenia
+        // probado en campo. NO se usa sd_power_system_off(): System OFF no despierta por temporizador.
         std::string arg = (cmd.length() > 5) ? cmd.substr(5) : "";
         while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
         if (arg == "test1") {
@@ -4912,9 +4948,31 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         enqueueResponse(replyDest, replyChannel, "OK: TONO DE ALARMA EMITIDO", true, false, hops);
     }
     else if (cmd == "pos") {
+        // NAVARICO-V6 (24/09/2026): 2.8 hizo la POSICION opt-in por canal y con precision 0
+        // allocPositionPacket() devuelve nullptr SIN EMITIR NADA. Antes el comando llamaba a
+        // sendOurPosition(dest, true) con el canal por defecto 0, asi que en los 16 perfiles (que no
+        // tienen precision de posicion en ningun canal) contestaba "OK: POSICION ENVIADA" y NO salia
+        // ni un paquete. En V5.3 si emitia: en 2.7.26 la precision solo TRUNCABA, no bloqueaba.
+        // Arreglo: resolver el canal de posicion (el que tenga comparticion activada) y, si no hay
+        // ninguno, emitir por el canal indicado con precision 14 (~1 km, el valor que los propios
+        // perfiles traen escrito y comentado). Es una ACCION PEDIDA A PROPOSITO por el operador, no
+        // emision automatica: la emision periodica sigue dependiendo de la compuerta de 2.8.
         if (positionModule) {
-            positionModule->sendOurPosition(NODENUM_BROADCAST, true);
-            enqueueResponse(replyDest, replyChannel, "OK: POSICION ENVIADA", true, false, hops);
+            uint8_t posChan = 0;
+            if (!findPositionChannel(posChan)) {
+                posChan = (replyChannel < channels.getNumChannels()) ? replyChannel : 0;
+            }
+            uint32_t posPrec = getPositionPrecisionForChannel(posChan);
+            if (posPrec == 0) {
+                posPrec = NAVA_POS_PRECISION_FORZADA;
+            }
+            positionModule->sendOurPosition(NODENUM_BROADCAST, true, posChan, posPrec);
+            char posBuf[150];
+            snprintf(posBuf, sizeof(posBuf),
+                     "OK: POSICION ENVIADA (canal %u, precision %u). Si el canal no tiene posicion "
+                     "activada se usa precision 14 por defecto",
+                     (unsigned)posChan, (unsigned)posPrec);
+            enqueueResponse(replyDest, replyChannel, posBuf, true, false, hops);
         } else {
             enqueueResponse(replyDest, replyChannel, "ERR: MODULO POSICION NO ACTIVO", true, false, hops);
         }
