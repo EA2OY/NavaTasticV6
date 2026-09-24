@@ -1010,6 +1010,15 @@ void NavaCLIModule::saveResiliencePrefs() {
     prefs.crc32 = crc32Buffer(&prefs, offsetof(ResiliencePrefs, crc32));
 
     concurrency::LockGuard g(spiLock);
+    // V5.3 (F5 del 15/09, portado 24/09/2026): borrar el temporal ANTES de abrirlo. En nRF52
+    // FILE_O_WRITE NO trunca (escribe al final), asi que un /resilience.tmp huerfano se
+    // concatenaria al contenido nuevo: written == sizeof seguiria siendo cierto, /resilience.bin
+    // quedaria al DOBLE de tamano y el arranque siguiente lo rechazaria -> CLEAN SLATE, o sea
+    // perder toda la configuracion persistida del motor. Faltaba en ESTA funcion (el mismo
+    // arreglo ya estaba en navaSetWasInSleep y en otros tres sitios).
+    if (FSCom.exists("/resilience.tmp")) {
+        FSCom.remove("/resilience.tmp");
+    }
     File f = FSCom.open("/resilience.tmp", FILE_O_WRITE);
     if (f) {
         size_t written = f.write((const uint8_t*)&prefs, sizeof(prefs));
