@@ -1637,7 +1637,11 @@ void NavaCLIModule::applyPersistedLoraConfig()
             changed = true;
         }
     }
-    if (prefs.lora_tx_power > 0 && lora.tx_power != prefs.lora_tx_power) {
+    // V5.3 (portado 24/09/2026): el 0 significa "sin fijar / por defecto de la region" y NO se reinyecta;
+    // cualquier otro valor SI, incluidos los NEGATIVOS, que son potencias reales validas (desde -9). Con
+    // el `> 0` anterior, un `set_txpower -3` se guardaba pero NO se restauraba tras un Clean Slate o un
+    // reset de fabrica: el nodo volvia a la potencia por defecto (la MAXIMA) sin avisar.
+    if (prefs.lora_tx_power != 0 && lora.tx_power != prefs.lora_tx_power) {
         lora.tx_power = prefs.lora_tx_power;
         changed = true;
     }
@@ -1747,6 +1751,13 @@ void NavaCLIModule::syncChannel0FromConfig()
             prefs.ch0_psk_len = ch0.settings.psk.size;
             changed = true;
         }
+    } else if (prefs.ch0_psk_len != 0) {
+        // V5.3 (portado 24/09/2026): el canal se ha quedado SIN clave (por ejemplo al aplicar un enlace).
+        // El respaldo NO puede conservar la vieja: tras un borrado resucitaria esa clave con el nombre
+        // nuevo y el nodo volveria a cifrar con la clave ANTIGUA mientras la flota usa otra.
+        memset(prefs.ch0_psk, 0, sizeof(prefs.ch0_psk));
+        prefs.ch0_psk_len = 0;
+        changed = true;
     }
     if (prefs.ch0_configured != 1) {
         prefs.ch0_configured = 1;
@@ -3972,7 +3983,12 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         saveResiliencePrefs();
 
         logEvent("CH_RESET de fabrica");
-        enqueueResponse(replyDest, replyChannel, "OK: CANALES RESTAURADOS A FABRICA (Navadmin Slot 1)", true, false, hops);
+        // V5.3 (portado 24/09/2026): este comando devuelve la consola al canal 1 y borra el silencio del
+        // canal publico; antes lo hacia sin decirlo.
+        enqueueResponse(replyDest, replyChannel,
+                        "OK: CANALES RESTAURADOS A FABRICA (Navadmin Slot 1). AVISO: SILENCIO DEL CANAL 1 "
+                        "DESACTIVADO Y CONSOLA AL CANAL 1",
+                        true, false, hops);
     }
     else if (cmd.rfind("ch_mqtt", 0) == 0) {
         std::string arg = (cmd.length() > 7) ? cmd.substr(7) : "";
@@ -4298,7 +4314,15 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
     else if (cmd.rfind("panic_ok", 0) == 0) {
         cancelPanicRollback();
         emitPanicOkPulse();
-        enqueueResponse(replyDest, replyChannel, "OK: SALTO DE PANICO CONSOLIDADO. ROLLBACK CANCELADO EN LA RED.", true, false, hops);
+        // V5.3 (portado 24/09/2026): mismo caso que panic: con la consola en el canal publico el POK!
+        // no sale, asi que la respuesta no puede prometer que se ha avisado a la red.
+        if (prefs.cliChannelSlot < 2)
+            enqueueResponse(replyDest, replyChannel,
+                            "OK: ROLLBACK CANCELADO EN ESTE NODO. AVISO: SIN AVISO A LA RED (CONSOLA EN CANAL 1)", true,
+                            false, hops);
+        else
+            enqueueResponse(replyDest, replyChannel, "OK: SALTO DE PANICO CONSOLIDADO. ROLLBACK CANCELADO EN LA RED.", true,
+                            false, hops);
     }
     else if (cmd.rfind("panic", 0) == 0) {
         std::string arg = (cmd.length() > 5) ? cmd.substr(5) : "";
@@ -5847,7 +5871,7 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
     else if (topic == "set_chem")
         return "set_chem: Quimica: ajusta corte/OCV/LPCOMP. Uso: /nava set_chem [lipo|nimh|sodium|lifepo4]";
     else if (topic == "set_vbat")
-        return "set_vbat: Corte de apagado por bateria baja. Uso: /nava set_vbat [2400-3600] mV";
+        return "set_vbat: Corte de apagado por bateria baja. Uso: /nava set_vbat [2400-3600] mV. REQUIERE ser MENOR que el umbral de despertar (si no, el nodo no volveria a arrancar)";
     else if (topic == "set_vwake")
         return "set_vwake: Nivel de reencendido solar: 1=2.1V 2=2.5V 3=3.7V 4=4.5V 5=3.3V. Uso: /nava set_vwake [1-5]";
     else if (topic == "storm")
