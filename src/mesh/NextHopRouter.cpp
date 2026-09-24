@@ -10,6 +10,9 @@
 #if HAS_TRAFFIC_MANAGEMENT
 #include "modules/TrafficManagementModule.h"
 #endif
+// V5.3 (portado 24/09/2026): el silencio del canal publico tambien calla el ACK del canal 1 (el acuse
+// de recibo delata presencia). No se toca el reenvio.
+#include "modules/NavaCLIModule.h"
 #include "NodeDB.h"
 
 #if USERPREFS_EVENT_MODE
@@ -152,8 +155,12 @@ bool NextHopRouter::shouldFilterReceived(const meshtastic_MeshPacket *p)
             // If repeated and not in Tx queue anymore, try relaying again, or if we are the destination, send the ACK again
             if (isRepeated) {
                 if (!findInTxQueue(p->from, p->id)) {
+                    // V5.3 (portado 24/09/2026): si el silencio del canal publico esta efectivo, NO se
+                    // repite el acuse por el canal 1, porque el ACK tambien delata presencia. El
+                    // reenvio (perhapsRebroadcast) NO se toca: el silencio promete no CONTESTAR, no
+                    // dejar de encaminar.
                     if (reprocessPacket(p) && !isBlockedEventCoordinatePacket(p) && !perhapsRebroadcast(p) && isToUs(p) &&
-                        p->want_ack) {
+                        p->want_ack && !NavaCLIModule::navaSilenciarRespuestasCh1(p)) {
                         sendAckNak(meshtastic_Routing_Error_NONE, getFrom(p), p->id, p->channel, 0);
                     }
                 }

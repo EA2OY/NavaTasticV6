@@ -889,6 +889,35 @@ bool NavaCLIModule::navaIsMuteActive()
     return false;
 }
 
+// V5.3 (portado 24/09/2026): el silencio del canal publico (navadmin_mute) SOLO es efectivo si la
+// consola vive en otro canal, porque el canal de la consola nunca se silencia. Lo usan el filtro de
+// comandos y el de respuestas del enrutador, para que los dos digan lo mismo: antes esa condicion
+// estaba escrita A MANO en dos sitios y podia divergir.
+bool NavaCLIModule::navaNavadminMutedEffective()
+{
+    if (!navaCLIModule || !navaCLIModule->prefs.navadminMuted) return false;
+    uint8_t cliSlot = navaCLIModule->prefs.cliChannelSlot;
+    if (cliSlot < 1 || cliSlot > 7) cliSlot = 1;
+    return cliSlot != 1;
+}
+
+// V5.3 (portado 24/09/2026): con el silencio del canal publico efectivo no se contesta ni se confirma
+// presencia por el canal 1: el ACUSE DE RECIBO tambien revela que el nodo esta ahi. Antes seguiamos
+// mandando los ACK del canal 1 con el silencio activo, o sea que el nodo se delataba igual.
+// OJO: a este ayudante se le llama TAMBIEN desde los enrutadores, donde el paquete puede venir todavia
+// SIN descifrar: ahi el canal es la HUELLA y no el numero, asi que hay que comparar con la huella (el
+// mismo defecto de familia que ya se corrigio en el tunel del panico).
+bool NavaCLIModule::navaSilenciarRespuestasCh1(const meshtastic_MeshPacket *p)
+{
+    if (!p) return false;
+    if (!navaNavadminMutedEffective()) return false;
+    if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
+        return p->channel == 1;
+    }
+    int16_t huella = channels.getHash(1);
+    return (huella >= 0 && p->channel == (uint8_t)huella);
+}
+
 // V5.3: con el mute activo el nodo NO se queda sordo: pasan los privados dirigidos a el (por ahi llega
 // "mute off" y entran los comandos de administracion, que es la via de vuelta por radio). El mute promete
 // no REENVIAR trafico ajeno y un paquete dirigido a nosotros nunca se reenvia (perhapsRebroadcast exige
@@ -2662,7 +2691,8 @@ bool NavaCLIModule::wantPacket(const meshtastic_MeshPacket *p)
 
         bool isCliChan = (p->channel == cliSlot);
         bool isNavadmin = (p->channel == 1);
-        if (isNavadmin && prefs.navadminMuted && cliSlot != 1) {
+        // V5.3: el criterio sale del ayudante, para que este filtro y el de respuestas digan lo mismo.
+        if (isNavadmin && navaNavadminMutedEffective()) {
             isNavadmin = false;
         }
 
@@ -2813,7 +2843,7 @@ ProcessMessage NavaCLIModule::handleReceived(const meshtastic_MeshPacket &mp)
     // Determinar canal y destinatario de la respuesta
     uint8_t replyChannel = 0;
     NodeNum replyDest = mp.from;
-    if (mp.channel == cliSlot || (mp.channel == 1 && !prefs.navadminMuted)) {
+    if (mp.channel == cliSlot || (mp.channel == 1 && !navaNavadminMutedEffective())) {
         replyChannel = mp.channel;
         replyDest = NODENUM_BROADCAST;
     }
@@ -3097,6 +3127,16 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                                   cmd == "pos_clear" ||
                                   cmd.rfind("ch_set", 0) == 0 ||
                                   cmd.rfind("ch_del", 0) == 0 ||
+                                  // V5.3 (portado 24/09/2026): ch_url devuelve el LLAVERO de canales
+                                  // (la clave de cada canal). En el canal privado de flota, si se
+                                  // ejecutaba sin !ID, el nodo lo mandaba por DM sin que nadie lo
+                                  // pidiera de forma individual. Su lista lo exige desde siempre; la
+                                  // nuestra lo habia perdido. set_lora/set_freq se anaden tambien
+                                  // (aunque esten retirados) para que las DOS listas coincidan
+                                  // exactamente y no vuelva a divergir.
+                                  cmd.rfind("ch_url", 0) == 0 ||
+                                  cmd.rfind("set_lora", 0) == 0 ||
+                                  cmd.rfind("set_freq", 0) == 0 ||
                                   cmd.rfind("set_cli_chan", 0) == 0 ||
                                   cmd == "ch_reset" ||
                                   cmd == "reboot" ||
@@ -5913,9 +5953,17 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
     if (topic == "set_chem") {
         const char *qca = (prefs.chemistry == 1) ? "nimh" : (prefs.chemistry == 2) ? "sodium" : (prefs.chemistry == 3) ? "lifepo4" : "lipo";
 #if defined(SEEED_SOLAR_NODE) || defined(SEEED_XIAO_NRF52840_KIT) || defined(HELTEC_T114)
-        snprintf(buf, sizeof(buf), "QCA: %s (%dmV,w%d)\nOPC: lipo|nimh|sodium [lifepo4 NO DISP: LPCOMP fijo >3.65V]\nlipo:3500/3.71V nimh:3400/3.71V sodium:2600/3.71V\nAVISO: persiste. ROLLBACK SOLO: nrf erase. CUIDADO", qca, prefs.vbat_cutoff, prefs.vwake_level);
+        // V5.3 (corregido 24/09/2026): este texto decia "sodium:2600/3.71V", que son los valores VIEJOS,
+        // mientras el manejador aplica 3000 mV / nivel 5. O sea que el nodo se contradecia a si mismo:
+        // su propia cabecera imprime los valores reales (QCA: ...) y el listado de opciones decia otros.
+        // El comentario del manejador avisa de que los valores van "en CUATRO sitios a proposito":
+        // este era el quinto y se habia quedado atras.
+        // Se anade tambien "lifepo4" a la lista de opciones del primer texto: el comando SI lo acepta
+        // (en placas con LPCOMP fijo responde ERR, pero en el resto lo aplica), asi que anunciarlo como
+        // no disponible era enganoso.
+        snprintf(buf, sizeof(buf), "QCA: %s (%dmV,w%d)\nOPC: lipo|nimh|sodium|lifepo4 [en placa con LPCOMP fijo: lifepo4 NO DISP]\nlipo:3500/3.71V nimh:3400/3.71V sodium:3000/3.30V (w5) lifepo4:2800/3.30V\nAVISO: persiste. ROLLBACK SOLO: nrf erase. CUIDADO", qca, prefs.vbat_cutoff, prefs.vwake_level);
 #else
-        snprintf(buf, sizeof(buf), "QCA: %s (%dmV,w%d)\nOPC: lipo|nimh|sodium|lifepo4\nlipo:3500/3.71V nimh:3400/3.71V sodium:2600/3.71V lifepo4:2800/3.30V\nAVISO: persiste. ROLLBACK SOLO: nrf erase. CUIDADO", qca, prefs.vbat_cutoff, prefs.vwake_level);
+        snprintf(buf, sizeof(buf), "QCA: %s (%dmV,w%d)\nOPC: lipo|nimh|sodium|lifepo4\nlipo:3500/3.71V nimh:3400/3.71V sodium:3000/3.30V (w5) lifepo4:2800/3.30V\nAVISO: persiste. ROLLBACK SOLO: nrf erase. CUIDADO", qca, prefs.vbat_cutoff, prefs.vwake_level);
 #endif
         return buf;
     }

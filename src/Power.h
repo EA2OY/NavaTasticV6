@@ -106,6 +106,12 @@ class Power : public concurrency::OSThread
     void updateOcvCurve(uint16_t cutoff);
     void setChemistryProfile(uint8_t chem);
     bool isLowBattery() { return low_voltage_counter >= 10; };
+    // V5.3 (portado 24/09/2026): ¿bateria AGOTADA? Sin USB, sin bateria detectada y con tension
+    // medida = bateria agotada, no una placa sin bateria (una placa sin bateria y sin USB no estaria
+    // encendida). Lo usan el pre-check del arranque (main.cpp) y readPowerStatus() para no informar
+    // -1 mV. El parametro force se acepta por compatibilidad con V5.1; en 2.8 el forzado lo aplica
+    // requestForcedRead() al principio de readPowerStatus().
+    bool isBatteryExhausted(bool force = false);
 
 #ifdef ARCH_ESP32
     int beforeLightSleep(void *unused);

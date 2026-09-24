@@ -220,6 +220,14 @@ class NavaCLIModule : public SinglePortModule, public concurrency::OSThread
 
     // NAVARICO F21/F22/V5: chequeos estáticos para enrutamiento y diagnóstico en RAM
     static bool navaIsMuteActive();
+    // V5.3 (portado 24/09/2026): el silencio del canal publico (navadmin_mute) SOLO es efectivo si la
+    // consola vive en otro canal (el canal de la consola nunca se silencia). Un solo sitio para el
+    // criterio, que antes estaba escrito a mano en dos.
+    static bool navaNavadminMutedEffective();
+    // V5.3 (portado 24/09/2026): con el silencio efectivo no se contesta NI SE DA ACUSE por el canal 1
+    // (el ACK tambien delata presencia). Se llama tambien desde los enrutadores, donde el paquete puede
+    // venir sin descifrar: alli el canal es la HUELLA, no el numero.
+    static bool navaSilenciarRespuestasCh1(const meshtastic_MeshPacket *p);
     // V5.3: con el mute activo se dejan pasar los privados dirigidos a ESTE nodo (es la vuelta por radio:
     // por ahi llega "mute off" y entran los comandos de administracion); el resto del trafico ajeno se
     // sigue descartando. Las alertas de difusion NO se pueden distinguir aqui: la prioridad no viaja en

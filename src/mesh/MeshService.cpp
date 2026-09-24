@@ -12,6 +12,8 @@
 #include "Power.h"
 #include "PowerFSM.h"
 #include "TypeConversions.h"
+// V5.3 (portado 24/09/2026): el silencio del canal publico tambien calla el NodeInfo a desconocidos.
+#include "modules/NavaCLIModule.h"
 #include "UptimeClock.h"
 #include "gps/GPSLog.h"
 #include "gps/RTC.h"
@@ -106,8 +108,16 @@ int MeshService::handleFromRadio(const meshtastic_MeshPacket *mp)
             if (hopsUsed > (int32_t)(config.lora.hop_limit + 2)) {
                 LOG_DEBUG("Skip send NodeInfo: %d hops too far", hopsUsed);
             } else {
-                LOG_INFO("Heard new node on ch. %d, send NodeInfo, ask response", mp->channel);
-                nodeInfoModule->sendOurNodeInfo(mp->from, true, mp->channel);
+                // V5.3 (portado 24/09/2026): con el silencio del canal publico efectivo NO se manda
+                // nuestro NodeInfo a un desconocido que aparezca por el canal 1: lo identificaria
+                // (nombre, clave publica y modelo) y delataria que el nodo esta ahi, que es justo lo
+                // que el silencio pretende evitar.
+                if (NavaCLIModule::navaSilenciarRespuestasCh1(mp)) {
+                    LOG_DEBUG("Skip send NodeInfo: canal publico silenciado");
+                } else {
+                    LOG_INFO("Heard new node on ch. %d, send NodeInfo, ask response", mp->channel);
+                    nodeInfoModule->sendOurNodeInfo(mp->from, true, mp->channel);
+                }
             }
         } else {
             LOG_DEBUG("Skip NodeInfo > 25%% ch. util");

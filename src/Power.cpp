@@ -1192,10 +1192,11 @@ void Power::shutdown()
 // decidir. Sin USB, sin bateria detectada y con tension medida = bateria agotada (una placa sin
 // bateria y sin USB no estaria encendida).
 // NOTA del port: en V5.1 (2.7.26) getBattVoltage() admite un parametro `force`; en 2.8 no lo lleva,
-// pero el forzado ya lo hace Power::readPowerStatus(force) llamando a requestForcedRead() antes de
-// leer, asi que aqui no hace falta.
-static bool navaBatteryIsExhausted()
+// pero el forzado ya lo hace readPowerStatus(force) llamando a requestForcedRead() antes de leer. El
+// parametro `force` se acepta por compatibilidad de llamada y no se usa.
+bool Power::isBatteryExhausted(bool force)
 {
+    (void)force; // el forzado lo aplica requestForcedRead() al principio de readPowerStatus()
     if (!batteryLevel)
         return false;
     int mv = batteryLevel->getBattVoltage();
@@ -1236,7 +1237,7 @@ void Power::readPowerStatus(bool force)
                                                    ((OCV[0] * NUM_CELLS) - (OCV[NUM_OCV_POINTS - 1] * NUM_CELLS))),
                                              0, 100);
             }
-        } else if (navaBatteryIsExhausted()) {
+        } else if (isBatteryExhausted()) {
             // V5.3 (hallazgo de auditoria, portado 24/09/2026): BATERIA AGOTADA. Sin esta rama la
             // tension se quedaba en el -1 de arriba, y como la linea de energia imprime ese numero tal
             // cual, el operador recibia por radio valores IMPOSIBLES justo cuando mas falta le hace

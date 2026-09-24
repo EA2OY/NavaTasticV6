@@ -3,6 +3,9 @@
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "configuration.h"
+// V5.3 (portado 24/09/2026): el silencio del canal publico (navadmin_mute) tiene que poder callar
+// tambien las RESPUESTAS y los ACK del canal 1, no solo los comandos.
+#include "modules/NavaCLIModule.h"
 #include "modules/RoutingModule.h"
 #include <algorithm>
 #include <assert.h>
@@ -113,6 +116,15 @@ void MeshModule::callModules(meshtastic_MeshPacket &mp, RxSource src)
     // We now allow **encrypted** packets to pass through the modules
     bool isDecoded = mp.which_payload_variant == meshtastic_MeshPacket_decoded_tag;
 
+    // V5.3 (portado 24/09/2026): con el silencio del canal publico (navadmin_mute) ACTIVO Y EFECTIVO,
+    // el nodo NO contesta a lo que le llega POR LA RADIO por el canal 1: es privacidad, para que un
+    // tercero con la clave publica no pueda localizarlo ni identificarlo. Antes seguiamos contestando,
+    // asi que el silencio no servia de nada frente a una peticion directa.
+    // NO afecta al reenvio de ese canal, ni a los privados, ni al canal privado de flota. Y solo se
+    // aplica a lo que llega por la radio: lo de NUESTRO telefono (RX_SRC_USER) y lo generado en el
+    // propio nodo (RX_SRC_LOCAL) se sigue contestando igual, o la App se quedaria sin respuestas.
+    bool muteRespuestasCh1 = isDecoded && (src == RX_SRC_RADIO) && NavaCLIModule::navaSilenciarRespuestasCh1(&mp);
+
     currentReply = NULL; // No reply yet
 
     bool ignoreRequest = false; // No module asked to ignore the request yet
@@ -157,7 +169,7 @@ void MeshModule::callModules(meshtastic_MeshPacket &mp, RxSource src)
                 // no one should have already replied!
                 assert(!currentReply);
 
-                if (isDecoded && mp.decoded.want_response) {
+                if (isDecoded && mp.decoded.want_response && !muteRespuestasCh1) {
                     printPacket("packet on wrong channel, returning error", &mp);
                     currentReply = pi.allocErrorResponse(meshtastic_Routing_Error_NOT_AUTHORIZED, &mp);
                 } else
@@ -175,7 +187,8 @@ void MeshModule::callModules(meshtastic_MeshPacket &mp, RxSource src)
                 // because currently when the phone sends things, it sends things using the local node ID as the from address.  A
                 // better solution (FIXME) would be to let phones have their own distinct addresses and we 'route' to them like
                 // any other node.
-                if (isDecoded && mp.decoded.want_response && toUs && (!isFromUs(&mp) || isToUs(&mp)) && !currentReply) {
+                if (isDecoded && mp.decoded.want_response && !muteRespuestasCh1 && toUs && (!isFromUs(&mp) || isToUs(&mp)) &&
+                    !currentReply) {
                     if (replyPortMatches(pi.ourPortNum, mp)) {
                         pi.sendResponse(mp);
                         LOG_INFO("Asked module '%s' to send a response", pi.name);

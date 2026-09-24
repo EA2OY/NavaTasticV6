@@ -7,6 +7,8 @@
 #include "mesh-pb-constants.h"
 #include "modules/NodeInfoModule.h"
 #include "modules/RoutingModule.h"
+// V5.3 (portado 24/09/2026): el silencio del canal publico tambien calla los ACK del canal 1.
+#include "modules/NavaCLIModule.h"
 
 // ReliableRouter::ReliableRouter() {}
 
@@ -118,7 +120,12 @@ bool ReliableRouter::shouldFilterReceived(const meshtastic_MeshPacket *p)
 void ReliableRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtastic_Routing *c)
 {
     if (isToUs(p)) { // ignore ack/nak/want_ack packets that are not address to us (we only handle 0 hop reliability)
-        if (!MeshModule::currentReply) {
+        // V5.3 (portado 24/09/2026): con el silencio del canal publico efectivo NO se manda NINGUN
+        // acuse por el canal 1. El ACK es la delacion mas barata que existe: confirma que el nodo esta
+        // ahi y escuchando, aunque no conteste nada mas. Por eso la puerta va aqui, envolviendo todos
+        // los sendAckNak de este bloque, y no en cada uno.
+        bool silenciarRespuestas = NavaCLIModule::navaSilenciarRespuestasCh1(p);
+        if (!MeshModule::currentReply && !silenciarRespuestas) {
             if (p->want_ack) {
                 if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
                     /* A response may be set to want_ack for retransmissions, but we don't need to ACK a response if it received
@@ -158,7 +165,7 @@ void ReliableRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtas
             LOG_DEBUG("Another module replied to this message, no need for 2nd ack");
         }
         if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag && c &&
-            c->error_reason == meshtastic_Routing_Error_PKI_UNKNOWN_PUBKEY) {
+            c->error_reason == meshtastic_Routing_Error_PKI_UNKNOWN_PUBKEY && !silenciarRespuestas) {
             if (owner.public_key.size == 32) {
                 LOG_INFO("PKI decrypt failure, send a NodeInfo");
                 nodeInfoModule->sendOurNodeInfo(p->from, false, p->channel, true);

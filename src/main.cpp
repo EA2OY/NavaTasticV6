@@ -696,7 +696,15 @@ void setup()
         for (uint8_t i = 0; i < preCheckReadings; i++) {
             power->readPowerStatus(true); // lectura ADC REAL, sin la cache de 5 s
             const int mvNow = powerStatus->getBatteryVoltageMv();
-            const bool isLow = powerStatus->getHasBattery() && !powerStatus->getHasUSB() && mvNow > 0 && mvNow < preCheckCutoffMv;
+            // V5.3 (portado 24/09/2026): BATERIA AGOTADA. Si el lector dice que NO hay bateria y no hay
+            // USB, es una bateria agotada (por debajo del umbral de "no hay bateria"), NO una placa sin
+            // bateria: una placa sin bateria y sin USB no estaria encendida. Antes este caso se saltaba
+            // entero, asi que el nodo ARRANCABA SIN PROTECCION con la bateria agotada: mandaba [Listo]
+            // como si estuviera cargando y seguia transmitiendo hasta el corte de tension (brownout).
+            // Su condicion es la nuestra MAS esta rama.
+            const bool exhausted = !powerStatus->getHasBattery() && !powerStatus->getHasUSB() && power->isBatteryExhausted();
+            const bool isLow = exhausted ||
+                               (powerStatus->getHasBattery() && !powerStatus->getHasUSB() && mvNow > 0 && mvNow < preCheckCutoffMv);
             if (!isLow)
                 break; // cualquier lectura buena aborta el apagado (criterio estricto)
             preCheckLastMv = mvNow;
