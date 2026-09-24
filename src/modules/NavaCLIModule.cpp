@@ -17,6 +17,7 @@
 #include "buzz/buzz.h"
 #include "Channels.h"
 #include "DisplayFormatters.h"
+#include "Throttle.h"
 #include "RTC.h"
 #include "../mesh/generated/meshtastic/apponly.pb.h"
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
@@ -1289,9 +1290,28 @@ bool NavaCLIModule::navaKeyIsProjectKey(const uint8_t *key)
     return false;
 }
 
-bool NavaCLIModule::navaKeyIsValid(const uint8_t *key)
+// V5.3 (D-11, portado 24/09/2026): ¿esta ESTA clave publica entre las claves admin de la config?
+// Es la pieza que permite REVALIDAR el permiso en cada comando. Sin ella, la marca de admin
+// (IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN) era un PESTILLO: se ponia la primera vez que el nodo
+// acreditaba al emisor y NO se borraba en ningun sitio, asi que quitar una clave en la App (la
+// unica via que revoca de verdad) no retiraba la autoridad: el tecnico revocado seguia pudiendo
+// mandar wipe, factory_reset, keys_clear, admin_ls o ch_url all de por vida.
+// OJO: /nava keys_clear NO revoca. Borra las copias de /resilience.bin pero no toca
+// config.security.admin_key[], asi que en el arranque siguiente la clave se reabsorbe.
+bool NavaCLIModule::navaKeyIsAdminInConfig(const uint8_t *pubKey)
 {
-    if (!key || navaKeyIsEmpty(key)) return false;
+    if (!pubKey) return false;
+    const meshtastic_Config_SecurityConfig &sec = config.security;
+    for (pb_size_t i = 0; i < sec.admin_key_count && i < 3; i++) {
+        if (sec.admin_key[i].size == 32 && memcmp(sec.admin_key[i].bytes, pubKey, 32) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool NavaCLIModule::navaKeyIsValid(const uint8_t *key)
+{    if (!key || navaKeyIsEmpty(key)) return false;
 
     // Rechazar claves corruptas o residuales de shift con más de 10 ceros
     size_t zeroCount = 0;
@@ -2596,10 +2616,26 @@ bool NavaCLIModule::wantPacket(const meshtastic_MeshPacket *p)
 
     // NAVARICO V5: pulsos binarios de pánico SOLO por canal privado de flota (slot >= 2, cifrado).
     // En Navadmin publico (slot 1) no tienen sentido: serian forjables por cualquiera.
-    if (p != nullptr && (p->decoded.portnum == meshtastic_PortNum_PRIVATE_APP || p->decoded.portnum == ourPortNum) &&
-        p->decoded.payload.size >= 24 && prefs.cliChannelSlot >= 2 && p->channel == prefs.cliChannelSlot) {
+    // V5.3 (portado 24/09/2026): y solo por el PUERTO PRIVADO del protocolo. Antes tambien se aceptaba
+    // un TEXTO (ourPortNum) que empezara por PANC/POK!, de modo que un mensaje de chat de 24 bytes o
+    // mas en el canal de flota podia DISPARAR O CONSOLIDAR un panico por casualidad. Es un fallo que su
+    // propia auditoria detecto y arreglo; aqui seguia abierto.
+    if (p != nullptr && p->decoded.portnum == meshtastic_PortNum_PRIVATE_APP && p->decoded.payload.size >= 24) {
         if (memcmp(p->decoded.payload.bytes, "PANC", 4) == 0 || memcmp(p->decoded.payload.bytes, "POK!", 4) == 0) {
-            return true;
+            if (prefs.cliChannelSlot >= 2 && p->channel == prefs.cliChannelSlot) {
+                return true;
+            }
+            // V5.3: antes el pulso se perdia EN SILENCIO. Se deja constancia SOLO cuando es un pulso
+            // de verdad (el puerto privado del protocolo), para que un texto que empiece por PANC/POK!
+            // no consuma el aviso ni enmascare un descarte real. Freno de un minuto (los pulsos se
+            // repiten cada 25-45 s).
+            static uint32_t ultimoAvisoPulsoDescartado = 0;
+            if (ultimoAvisoPulsoDescartado == 0 || !Throttle::isWithinTimespanMs(ultimoAvisoPulsoDescartado, 60000)) {
+                ultimoAvisoPulsoDescartado = millis();
+                LOG_WARN("NavaCLI: pulso de panico DESCARTADO (consola en slot %d, pulso en canal %d): solo se "
+                         "acepta por el canal privado de flota",
+                         (int)prefs.cliChannelSlot, (int)p->channel);
+            }
         }
     }
 
@@ -2736,8 +2772,8 @@ ProcessMessage NavaCLIModule::handleReceived(const meshtastic_MeshPacket &mp)
     }
 
     // Comprobar si es un pulso binario de pánico o consolidación (SOLO canal privado de flota, slot >= 2)
-    if ((mp.decoded.portnum == meshtastic_PortNum_PRIVATE_APP || mp.decoded.portnum == ourPortNum) && mp.decoded.payload.size >= 24 &&
-        prefs.cliChannelSlot >= 2 && mp.channel == prefs.cliChannelSlot) {
+    if (mp.decoded.portnum == meshtastic_PortNum_PRIVATE_APP && mp.decoded.payload.size >= 24 && prefs.cliChannelSlot >= 2 &&
+        mp.channel == prefs.cliChannelSlot) {
         if (memcmp(mp.decoded.payload.bytes, "POK!", 4) == 0) {
             LOG_INFO("NavaCLI: Recibido pulso POK de consolidacion de red desde 0x%08x", (unsigned int)mp.from);
             cancelPanicRollback();
@@ -2796,15 +2832,8 @@ ProcessMessage NavaCLIModule::handleReceived(const meshtastic_MeshPacket &mp)
             // Auditoria 26/08: el DM llegó cifrado y se descifró (mp.pki_encrypted) -> prueba de
             // posesión de la clave privada. Si la clave pública del emisor coincide con admin_key[],
             // acreditarlo ahora (bitfield + favorito) y proseguir; si no, rechazar.
-            bool senderKeyIsAdmin = false;
-            for (int ki = 0; ki < 3; ki++) {
-                if (config.security.admin_key[ki].size == 32 &&
-                    memcmp(config.security.admin_key[ki].bytes, senderNode->public_key.bytes, 32) == 0) {
-                    senderKeyIsAdmin = true;
-                    break;
-                }
-            }
-            if (!senderKeyIsAdmin) {
+            // V5.3 (D-11): la comprobacion se movio a navaKeyIsAdminInConfig() para reutilizarla.
+            if (!navaKeyIsAdminInConfig(senderNode->public_key.bytes)) {
                 if (unauthorizedReplied.insert(mp.from).second) {
                     LOG_WARN("Rechazado: nodo 0x%08x no es admin verificado", mp.from);
                     enqueueResponse(mp.from, 0, "NO AUTORIZADO COMO ADMINISTRADOR", true, false, hops);
@@ -2817,6 +2846,27 @@ ProcessMessage NavaCLIModule::handleReceived(const meshtastic_MeshPacket &mp)
                 nodeInfoLiteSetBit(lite, NODEINFO_BITFIELD_IS_FAVORITE_MASK, true);
                 LOG_WARN("Acreditado como admin por DM PKI descifrado: 0x%08x", mp.from);
             }
+        } else if (!navaKeyIsAdminInConfig(senderNode->public_key.bytes)) {
+            // 🔴 V5.3 (D-11, portado 24/09/2026): EL PESTILLO. El bit de admin YA estaba puesto.
+            // Antes eso bastaba para autorizar TODO sin volver a mirar la config, y NADA borraba ese
+            // bit en ningun sitio del firmware: quitar una clave EN LA APP (la unica via que revoca
+            // de verdad) no retiraba la autoridad, asi que un tecnico revocado seguia mandando
+            // wipe/factory_reset/keys_clear y, peor, admin_ls y keys_ls (las claves admin en base64
+            // por radio) y ch_url all (el llavero de canales). Ahora se revalida en CADA comando.
+            // El rechazo NO puede ser mudo: en montana el silencio cuesta una hora de diagnostico.
+            // Aqui SI se puede responder, porque el camino DM contesta dirigido y no genera difusion.
+            LOG_WARN("Rechazado y permiso RETIRADO: 0x%08x tenia marca de admin pero su clave ya no "
+                     "esta en admin_key[]", mp.from);
+            if (unauthorizedReplied.insert(mp.from).second) {
+                enqueueResponse(mp.from, 0, "NO AUTORIZADO (CLAVE RETIRADA)", true, false, hops);
+            }
+            // Se escribe sobre el nodo de la NodeDB con comprobacion de nulo: nada de encadenar la
+            // llamada directamente o un nulo seria un fallo de segmento.
+            meshtastic_NodeInfoLite *liteRet = nodeDB->getMeshNode(mp.from);
+            if (liteRet) {
+                liteRet->bitfield &= ~NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_MASK;
+            }
+            return ProcessMessage::STOP;
         }
         // NAVARICO: Blindar al administrador verificado como favorito en NodeDB (en RAM)
         if (senderNode && !nodeInfoLiteIsFavorite(senderNode)) {
@@ -2830,6 +2880,23 @@ ProcessMessage NavaCLIModule::handleReceived(const meshtastic_MeshPacket &mp)
         const meshtastic_NodeInfoLite *senderNode = nodeDB->getMeshNode(mp.from);
         if (!senderNode || !nodeDB->isAdminNode(*senderNode)) {
             LOG_WARN("Rechazado: Comando /nava en canal sin firma PKI desde 0x%08x", mp.from);
+            return ProcessMessage::STOP;
+        }
+        // 🔴 V5.3 (D-11, portado 24/09/2026): REVALIDAR la clave en CADA comando. El bit de admin era
+        // un PESTILLO: se ponia al acreditarse y no se borraba en ningun sitio, asi que quitar una
+        // clave de config.security.admin_key[] (quitandola EN LA APP) NO retiraba la autoridad y un
+        // nodo con la marca vieja seguia mandando comandos por difusion.
+        // Aqui el rechazo es MUDO A PROPOSITO: responder seria una difusion por cada intento de un
+        // nodo revocado (tormenta de radio), y los comandos permitidos en difusion son solo de
+        // lectura precisamente para evitarlo. Quien quiera saber por que no le funciona tiene el
+        // camino DM, que SI contesta "NO AUTORIZADO (CLAVE RETIRADA)".
+        if (!navaKeyIsAdminInConfig(senderNode->public_key.bytes)) {
+            LOG_WARN("Rechazado y permiso RETIRADO (difusion, mudo a proposito): 0x%08x tenia marca "
+                     "de admin pero su clave ya no esta en admin_key[]", mp.from);
+            meshtastic_NodeInfoLite *liteRet = nodeDB->getMeshNode(mp.from);
+            if (liteRet) {
+                liteRet->bitfield &= ~NODEINFO_BITFIELD_IS_CRYPTOGRAPHICALLY_VERIFIED_ADMIN_MASK;
+            }
             return ProcessMessage::STOP;
         }
         // NAVARICO: Blindar al administrador verificado como favorito en NodeDB (en RAM)

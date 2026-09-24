@@ -335,6 +335,10 @@ class NavaCLIModule : public SinglePortModule, public concurrency::OSThread
     void adoptPersistedAdminKeys();
     static bool navaKeyIsEmpty(const uint8_t *key);
     static bool navaKeyIsProjectKey(const uint8_t *key);
+    // V5.3 (D-11, portado 24/09/2026): ¿esta ESTA clave publica entre las admin de la config?
+    // Es lo que permite REVALIDAR el permiso en cada comando en vez de fiarse de una marca puesta
+    // una vez. Sin esto, quitar una clave en la App no revocaba NADA (el bit era un pestillo).
+    static bool navaKeyIsAdminInConfig(const uint8_t *pubKey);
     static bool navaKeyIsValid(const uint8_t *key);
 
     // NAVARICO F21: Restauración y respaldo de canales secundarios

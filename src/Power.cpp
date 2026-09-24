@@ -1187,6 +1187,21 @@ void Power::shutdown()
 // NAVARICO-V6: "force" (por defecto false) hace que la lectura de tension sea REAL, saltandose la
 // cache de 5 s del ADC. Lo usa el pre-check de bateria del arranque, que necesita medidas
 // independientes. El resto de llamadas no cambia de comportamiento.
+// V5.3 (portado 24/09/2026): ¿bateria AGOTADA? Se pide la tension CRUDA a proposito: cuando el lector
+// dice "no hay bateria", readPowerStatus() deja la tension a -1, asi que ese valor no sirve para
+// decidir. Sin USB, sin bateria detectada y con tension medida = bateria agotada (una placa sin
+// bateria y sin USB no estaria encendida).
+// NOTA del port: en V5.1 (2.7.26) getBattVoltage() admite un parametro `force`; en 2.8 no lo lleva,
+// pero el forzado ya lo hace Power::readPowerStatus(force) llamando a requestForcedRead() antes de
+// leer, asi que aqui no hace falta.
+static bool navaBatteryIsExhausted()
+{
+    if (!batteryLevel)
+        return false;
+    int mv = batteryLevel->getBattVoltage();
+    return mv > 0 && !batteryLevel->isBatteryConnect() && !batteryLevel->isVbusIn();
+}
+
 void Power::readPowerStatus(bool force)
 {
     int32_t batteryVoltageMv = -1; // Assume unknown
@@ -1221,6 +1236,15 @@ void Power::readPowerStatus(bool force)
                                                    ((OCV[0] * NUM_CELLS) - (OCV[NUM_OCV_POINTS - 1] * NUM_CELLS))),
                                              0, 100);
             }
+        } else if (navaBatteryIsExhausted()) {
+            // V5.3 (hallazgo de auditoria, portado 24/09/2026): BATERIA AGOTADA. Sin esta rama la
+            // tension se quedaba en el -1 de arriba, y como la linea de energia imprime ese numero tal
+            // cual, el operador recibia por radio valores IMPOSIBLES justo cuando mas falta le hace
+            // saber el estado: `bat`/`ping`/`env` decian "Bat: -1 mV" y `power`/`status` decian
+            // "ADC 65535 mV" (el -1 recortado por un uint16_t delante).
+            // Se informa la tension REAL. El porcentaje sigue sin darse: no se puede estimar con el
+            // pack por debajo de la tabla OCV.
+            batteryVoltageMv = batteryLevel->getBattVoltage();
         }
     }
 
