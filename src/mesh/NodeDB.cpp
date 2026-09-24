@@ -3135,23 +3135,32 @@ bool NodeDB::saveDeviceStateToDisk()
 
 bool NodeDB::saveNodeDatabaseToDisk()
 {
-    // V5.3 (portado 24/09/2026): "RAM-only" NO puede significar "no se guarda NADA". En 2.7.26 la
-    // clave USERPREFS_NODEDB_RAM_ONLY del perfil era INERTE (no la leia nadie), asi que V5.3
-    // guardaba a flash un SUBCONJUNTO CRITICO de la NodeDB mediante un filtro. En 2.8 esa misma
-    // clave SI se lee y apagaba la persistencia por completo: favoritos, ignorados, routers
-    // directos, auto-favoritos y ADMINISTRADORES dejaban de sobrevivir a un reinicio.
-    // Aqui se conserva la intencion de la clave (no escribir la base ENTERA ni los satelites:
-    // eso es lo que desgasta la flash) pero SI se escriben los cinco grupos criticos, igual que
-    // en V5.3. La lista de "activos" de la flash se sigue dejando vacia mas abajo a proposito.
+    // V5.3 (portado 24/09/2026; CORREGIDO 25/09): "RAM-only" NO puede significar "no se guarda
+    // NADA". En 2.7.26 la clave USERPREFS_NODEDB_RAM_ONLY del perfil era INERTE (no la leia nadie),
+    // asi que V5.3 guardaba a flash un SUBCONJUNTO CRITICO de la NodeDB mediante un filtro. En 2.8
+    // esa misma clave SI se lee y apagaba la persistencia por completo: favoritos, ignorados,
+    // routers directos, auto-favoritos y ADMINISTRADORES dejaban de sobrevivir a un reinicio.
+    //
+    // ⚠️ PRIMER INTENTO (24/09) Y POR QUE ESTABA MAL: se filtraba EN EL SITIO, compactando
+    // `nodeDatabase.nodes` y haciendo resize(). Pero en 2.8 `meshNodes` es un PUNTERO A ESE VECTOR
+    // (`meshNodes = &nodeDatabase.nodes`) y `numMeshNodes` es un contador APARTE: al encoger el
+    // vector, la base EN MEMORIA perdia los nodos no criticos mientras numMeshNodes seguia diciendo
+    // que estaban -> cualquier acceso posterior a uno de ellos leia memoria invalida y el NODO SE
+    // COLGABA "al rato" (sintoma observado en hardware: LED sin heartbeat y pantalla congelada).
+    // AHORA: se filtra una COPIA TEMPORAL y se restaura SIEMPRE. La base viva no se toca ni un byte.
+    // El coste en heap es de unos pocos KB (los criticos suelen ser un punado de nodos).
+    std::vector<meshtastic_NodeInfoLite> nodosCriticos;
+    bool filtroActivo = false;
+#if defined(USERPREFS_NODEDB_RAM_ONLY) && USERPREFS_NODEDB_RAM_ONLY
     {
-        // Compactado EN EL SITIO (sin vector auxiliar: el temporal costaba mas bytes de codigo que
-        // el propio filtro en una placa que va al borde de la flash).
-        size_t destino = nodeDatabase.nodes.empty() ? 0 : 1; // el nodo local se queda siempre
+        if (!nodeDatabase.nodes.empty()) {
+            nodosCriticos.push_back(nodeDatabase.nodes[0]); // el nodo local se guarda siempre
+        }
         for (size_t i = 1; i < numMeshNodes && i < nodeDatabase.nodes.size(); i++) {
             const auto &node = nodeDatabase.nodes[i];
-            bool guardar = nodeInfoLiteIsFavorite(&node) ||               // favorito explicito o por clave admin
-                           nodeInfoLiteIsIgnored(&node) ||                // ignorado: debe seguir ignorado tras reiniciar
-                           isAdminNode(node);                             // administrador autorizado
+            bool guardar = nodeInfoLiteIsFavorite(&node) || // favorito explicito o por clave admin
+                           nodeInfoLiteIsIgnored(&node) ||  // ignorado: debe seguir ignorado tras reiniciar
+                           isAdminNode(node);               // administrador autorizado
             if (!guardar && node.has_hops_away && node.hops_away == 0 && nodeInfoLiteHasUser(&node)) {
                 guardar = (node.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
                            node.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
@@ -3162,16 +3171,14 @@ bool NodeDB::saveNodeDatabaseToDisk()
                 guardar = (std::find(adr.begin(), adr.end(), node.num) != adr.end());
             }
             if (guardar) {
-                if (destino != i) {
-                    nodeDatabase.nodes[destino] = node;
-                }
-                destino++;
+                nodosCriticos.push_back(node);
             }
         }
-        nodeDatabase.nodes.resize(destino);
+        filtroActivo = true;
+        LOG_DEBUG("NodeDB: RAM-only, se guardaran solo nodos criticos (%u de %u)",
+                  (unsigned)nodosCriticos.size(), (unsigned)numMeshNodes);
     }
-    LOG_DEBUG("NodeDB: RAM-only, guardando solo nodos criticos (%u de %u)",
-              (unsigned)nodeDatabase.nodes.size(), (unsigned)numMeshNodes);
+#endif
 
     // Don't persist the node DB until this device has a PKI keypair
     // TODO: revisit when https://github.com/meshtastic/firmware/pull/10478 lands
@@ -3264,8 +3271,20 @@ bool NodeDB::saveNodeDatabaseToDisk()
 #endif
 
     size_t nodeDatabaseSize;
-    pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
-    bool ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
+    bool ok;
+    if (filtroActivo) {
+        // Se codifica SOLO el subconjunto critico. El intercambio es temporal y la restauracion NO
+        // depende de que saveProto() salga bien: si algo lanzara, el vector original seguiria intacto
+        // porque el filtro se construyo en una COPIA. Esto es lo que impide el cuelgue: la base viva
+        // (a la que apunta `meshNodes`) nunca se encoge.
+        nodeDatabase.nodes.swap(nodosCriticos);
+        pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
+        ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
+        nodeDatabase.nodes.swap(nodosCriticos); // se devuelve la base COMPLETA a memoria
+    } else {
+        pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
+        ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
+    }
 
     nodeDatabase.positions.clear();
     nodeDatabase.positions.shrink_to_fit();
