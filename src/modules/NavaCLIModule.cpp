@@ -18,6 +18,10 @@
 #include "Channels.h"
 #include "DisplayFormatters.h"
 #include "Throttle.h"
+// V5.3 (portado 24/09/2026): powerHAL_isPowerLevelSafe(). Lo usa navaSetWasInSleep() para NO escribir
+// /resilience.bin cuando la alimentacion esta en un nivel inseguro (un brownout a mitad deja el
+// fichero truncado -> Clean Slate -> reset de fabrica). NodeDB ya la usaba igual.
+#include <power/PowerHAL.h>
 #include "RTC.h"
 #include "../mesh/generated/meshtastic/apponly.pb.h"
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
@@ -808,33 +812,45 @@ void NavaCLIModule::navaSetWasInSleep(bool on)
         tmp.deploy_done = 0;
         tmp.version = NAVS_RESILIENCE_VERSION;
     }
+    // GUARDA DE POTENCIA (V5.3, portada 24/09/2026): no escribir con la alimentacion en un nivel
+    // inseguro. Esta funcion se ejecuta JUSTO cuando la bateria esta por debajo del corte, o sea en el
+    // peor momento posible para una escritura: un brownout a mitad deja el fichero truncado ->
+    // Clean Slate -> reset de fabrica. NodeDB usa esta misma comprobacion en TODOS sus guardados.
+    if (!powerHAL_isPowerLevelSafe()) {
+        LOG_WARN("navaSetWasInSleep: nivel de potencia inseguro, no se escribe /resilience.bin");
+        return;
+    }
+    // ORDEN CORRECTO (V5.3): primero se cambia el dato y DESPUES se recalcula el CRC. Nuestra version
+    // calculaba el CRC ANTES de poner wasInSleep, asi que el CRC cubria el valor VIEJO: al arrancar,
+    // loadResiliencePrefs() rechazaba el fichero por CRC invalido -> Clean Slate -> redespliegue ->
+    // reinicio, con la bateria aun baja. Este fallo lo introdujo el arreglo del CRC de la auditoria.
     tmp.wasInSleep = on ? 1 : 0;
-    // NAVARICO-V6 (auditoria): recalcular el CRC SIEMPRE. Antes NO se recalculaba al releer un
-    // fichero valido, asi que cambiar wasInSleep dejaba el CRC obsoleto -> al arrancar el motor lo
-    // rechazaba (Clean Slate) -> redespliegue + factoryReset -> reinicio -> bucle con borrado de
-    // configuracion mientras la bateria siguiera baja. Y escritura atomica (tmp + rename) como
-    // saveResiliencePrefs: esto corre en el arranque con bateria baja, justo cuando es probable
-    // que se corte la alimentacion a mitad de escritura.
     tmp.crc32 = crc32Buffer(&tmp, offsetof(ResiliencePrefs, crc32));
-    // NAVARICO-V6 (traspaso NavaTastic 15/09, cambio F): NO borrar el bueno antes de saber si el
-    // nuevo entra. Antes era remove(bueno) + rename(tmp->bueno) SIN comprobar el retorno: si el
-    // renombrado fallaba tras el borrado, el bueno ya no existia y la unica copia valida quedaba en
-    // el temporal... que el arranque siguiente borra -> Clean Slate -> reset de fabrica.
-    // Ahora se intenta PRIMERO el renombrado sin borrar nada (littlefs 1.6 lo rechaza con
-    // LFS_ERR_EXIST si el destino existe) y SOLO si falla se borra y se reintenta. El retorno se
-    // comprueba en los dos casos.
+    // V5.3 (F5): borrar el temporal ANTES de abrirlo. En nRF52 FILE_O_WRITE NO trunca (abre con
+    // LFS_O_RDWR|LFS_O_CREAT y hace seek al FINAL), asi que un .tmp huerfano -de un corte entre close y
+    // rename, o de un rename fallido que se conserva a proposito- haria que el contenido nuevo se
+    // AÑADIESE al viejo: written == sizeof(tmp) seguiria siendo TRUE, el rename sobrescribiria y
+    // /resilience.bin quedaria al DOBLE de tamaño -> loadResiliencePrefs lo rechaza (exige
+    // fileSize <= sizeof) -> Clean Slate -> reset a linea base.
+    if (FSCom.exists("/resilience.tmp")) {
+        FSCom.remove("/resilience.tmp");
+    }
     File f = FSCom.open("/resilience.tmp", FILE_O_WRITE);
     if (f) {
         size_t written = f.write((const uint8_t *)&tmp, sizeof(tmp));
         f.close();
         if (written == sizeof(tmp)) {
+            // V5.3 (F4): NO borrar el bueno antes de saber si el renombrado funciona. lfs_rename
+            // SOBRESCRIBE el destino y es atomico, asi que no hace falta borrar nada: basta con
+            // comprobar el retorno. Nuestra version borraba /resilience.bin y reintentaba: si el
+            // reintento fallaba, el bueno ya no existia y la unica copia quedaba en el temporal, que el
+            // arranque siguiente borra -> Clean Slate -> reset de fabrica.
             if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
-                FSCom.remove("/resilience.bin");
-                if (!FSCom.rename("/resilience.tmp", "/resilience.bin")) {
-                    LOG_ERROR("NavaCLI: no se pudo sustituir /resilience.bin; se conserva el temporal");
-                }
+                LOG_ERROR("navaSetWasInSleep: no se pudo sustituir /resilience.bin; "
+                          "los datos nuevos quedan en /resilience.tmp");
             }
         } else {
+            LOG_WARN("navaSetWasInSleep: escritura incompleta, se conserva el fichero anterior");
             FSCom.remove("/resilience.tmp");
         }
     }
