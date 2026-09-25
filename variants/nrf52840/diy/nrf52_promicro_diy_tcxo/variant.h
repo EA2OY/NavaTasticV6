@@ -79,6 +79,22 @@ https://github.com/brad112358/easy_E22
 // Pin 13 enables 3.3V periphery. If the Lora module is on this pin, then it should stay enabled at all times.
 #define PIN_3V3_EN (0 + 13) // P0.13
 
+// NAVARICO: EJE RADIO (portado de V5.3 el 25/09/2026). El env elegido define la radio
+// (variants/nrf52840/navarrico.ini):
+//   - navarrico_promicro_e22p_*  -> E22P:     P0.17 = ALIMENTACION de la radio (~40 mA; se apaga en
+//                                             deep sleep y en el storm)
+//   - navarrico_faketec_sx1262_* -> HT-RA62:  P0.17 = RXEN (sin pin de alimentacion; se apaga por SPI)
+//
+// ⚠️ ESTE BLOQUE FALTABA EN EL PORTAJE Y ROMPIA LA TRANSMISION: sin el, P0.17 se declaraba mas abajo
+// como SX126X_RXEN, la E22P se quedaba SIN su pin de alimentacion (recibia por tension de fuga, pero
+// NO podia transmitir: la app daba "failed to deliver to mesh") y ademas se conmutaba la antena en
+// cada cambio de direccion. El nodo terminaba reiniciandose solo a los ~3 minutos, al fallar la
+// primera transmision real (el aviso [Boot]).
+// Para cambiar de radio: usar el env navarrico_* correspondiente (no editar este archivo).
+#ifdef NAVARICO_RADIO_E22P
+#define RADIO_POWER_ENABLE_PIN (0 + 17) // P0.17 Radio Power Enable (E22P)
+#endif
+
 // Analog pins
 #define BATTERY_PIN (0 + 31) // P0.31 Battery ADC
 #define ADC_CHANNEL ADC1_GPIO4_CHANNEL
@@ -198,7 +214,13 @@ https://github.com/brad112358/easy_E22
                                  // so it needs connecting externally if it is used in this way
 #define SX126X_BUSY (0 + 29)     // P0.29
 #define SX126X_RESET (0 + 9)     // P0.09
-#define SX126X_RXEN (0 + 17)     // P0.17
+// NAVARICO: RXEN por radio (portado de V5.3 el 25/09/2026). E22P -> SIN USAR (su P0.17 es la
+// ALIMENTACION, ver arriba, y la conmutacion TX/RX la hace DIO2); HT-RA62 -> P0.17 como RXEN.
+#ifdef NAVARICO_RADIO_E22P
+#define SX126X_RXEN RADIOLIB_NC
+#else
+#define SX126X_RXEN (0 + 17) // P0.17 RXEN (HT-RA62 / Faketec)
+#endif
 #define SX126X_TXEN RADIOLIB_NC  // Assuming that DIO2 is connected to TXEN pin. If not, TXEN must be connected.
 
 // LR1121

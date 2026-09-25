@@ -608,12 +608,16 @@ void nrf52Setup()
 #endif
 
     // NAVARICO-V6 (23/09, portado de NavaTastic V5.3): ALIMENTACION DE LA RADIO.
-    // En la placa Xiao con modulo E22P, D5 no es el RXEN del SX1262: es el pin que DA DE COMER al
-    // modulo. Si no se pone en ALTO aqui, la radio no se enciende y el nodo arranca MUDO (compila
-    // bien y no funciona en hardware). Es la primera cosa que se hace en setup() a proposito, para
-    // que la radio tenga alimentacion antes de inicializarse.
-    // Solo se define en la variante que lo necesita (RADIO_POWER_ENABLE_PIN), asi que en el resto de
-    // placas este bloque NO existe: no toca nada de las demas.
+    // En las placas con modulo E22P, este pin NO es un RXEN del SX1262: es el pin que DA DE COMER al
+    // modulo (Promicro E22P: P0.17 | Xiao E22P: D5). Si no se pone en ALTO aqui, la radio no se
+    // enciende bien y el nodo arranca MUDO o SIN PODER TRANSMITIR (compila bien y falla en hardware).
+    // Es lo primero que se hace en setup() a proposito: la radio tiene que tener alimentacion antes
+    // de inicializarse.
+    // Solo se define en las variantes que lo necesitan (RADIO_POWER_ENABLE_PIN), asi que en el resto
+    // de placas este bloque NO existe y no toca nada.
+    // ⚠️ 25/09/2026: al Promicro E22P le FALTABA el define en su variant.h (se perdio en el portaje),
+    // asi que este bloque no se compilaba en la placa del operador y la radio se quedaba sin su pin de
+    // alimentacion: RECIBIA pero NO TRANSMITIA. Ver el comentario del variant.h.
 #ifdef RADIO_POWER_ENABLE_PIN
     pinMode(RADIO_POWER_ENABLE_PIN, OUTPUT);
     digitalWrite(RADIO_POWER_ENABLE_PIN, HIGH);
