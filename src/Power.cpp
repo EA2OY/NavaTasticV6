@@ -1345,17 +1345,24 @@ void Power::readPowerStatus(bool force)
     // have more than 10 low readings in a row. NOTE: min LiIon/LiPo voltage
     // is 2.0 to 2.5V, current OCV min is set to 3100 that is large enough.
     //
-    // V5.3 (portado 24/09/2026): faltaban DOS cosas en este guard, y las dos dejaban el nodo MENOS
-    // protegido cuanto mas descargada estaba la bateria:
-    //  1. `!force`: una lectura FORZADA (el pre-check del arranque) no debe pre-cargar el contador. El
-    //     nodo que despierta con bateria baja tiene que operar el ciclo COMPLETO de lecturas antes de
-    //     dormir; sin esto se dormia antes de tiempo.
-    //  2. la rama de bateria AGOTADA: por debajo del umbral de "no hay bateria", getHasBattery() dice
-    //     que NO hay bateria, el guard entero se saltaba y el contador no contaba NUNCA -> el nodo
-    //     seguia transmitiendo hasta el corte de tension (brownout) en vez de dormirse a esperar al sol.
-    //     Sin USB eso es una bateria agotada, no una placa sin bateria: cuenta como lectura baja.
-    if (!force && batteryLevel && !powerStatus2.getHasUSB() &&
-        (powerStatus2.getHasBattery() || isBatteryExhausted(false))) {
+    // V5.3 (portado 24/09/2026; CORREGIDO 25/09): de las DOS cosas que traia el arreglo original solo
+    // se conserva `!force`. La rama de "bateria AGOTADA" se ha RETIRADO por un FALSO POSITIVO real:
+    //
+    //   `agotada = !powerStatus2.getHasBattery()` hacia que el contador SUBIERA EN CADA LECTURA
+    //   ignorando la tension medida, porque en esta placa getHasBattery() devuelve false de forma
+    //   espuria. Con USERPREFS_LOW_BATTERY_READINGS_COUNT=8 y una lectura cada ~20 s, el nodo se
+    //   dormia a los ~160 s SIEMPRE, con la bateria llena. Sintoma en hardware: "se reinicia solo
+    //   cada 2-3 minutos" (el sueno reinicia el nodo), repetible y SIN NINGUN AVISO.
+    //
+    // El objetivo legitimo de aquella rama (que el nodo no siga transmitiendo hasta el brownout con
+    // la bateria realmente agotada) NO se puede conseguir con getHasBattery(): hay que mirar la
+    // TENSION. Si algun dia se quiere cubrir, la condicion debe exigir que la lectura de tension sea
+    // VALIDA y baja, nunca `!getHasBattery()`.
+    //
+    // `!force` SI se conserva: una lectura FORZADA (el pre-check del arranque) no debe pre-cargar el
+    // contador; el nodo que despierta con bateria baja tiene que operar el ciclo COMPLETO de lecturas
+    // antes de dormir, como en V5.3.
+    if (!force && batteryLevel && powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
         // NAVARICO-V6 (bloque de energia): el umbral y el numero de lecturas salen del PERFIL
         // (USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV / _READINGS_COUNT), que es como estaba disenado en
         // NavaTastic. Sin esas claves se conserva el comportamiento de 2.8 (OCV minimo, 10 lecturas).
@@ -1366,8 +1373,7 @@ void Power::readPowerStatus(bool force)
         const uint16_t lowCutoffMv = USERPREFS_LOW_BATTERY_SLEEP_THRESHOLD_MV;
         const uint8_t lowReadingsNeeded = USERPREFS_LOW_BATTERY_READINGS_COUNT;
         const int32_t vNow = batteryLevel->getBattVoltage();
-        const bool agotada = !powerStatus2.getHasBattery();
-        if (agotada || vNow < (int32_t)lowCutoffMv * NUM_CELLS) {
+        if (vNow < (int32_t)lowCutoffMv * NUM_CELLS) {
             low_voltage_counter++;
             LOG_DEBUG("Low voltage counter: %d/%d", low_voltage_counter, lowReadingsNeeded);
             if (low_voltage_counter >= lowReadingsNeeded) {
