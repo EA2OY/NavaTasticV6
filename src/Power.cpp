@@ -1089,6 +1089,10 @@ void Power::setChemistryProfile(uint8_t chem)
 
 void Power::reboot()
 {
+    // NAVARICO-V6 (25/09/2026): log explicito para poder atribuir un Reset reason 0x4 (SREQ) a ESTE
+    // camino (reboot pedido: comando /nava reboot, accion diferida, o la App). Sin esto, un reinicio
+    // pedido por software era indistinguible de un lfs_assert o del sueno de tracker.
+    LOG_ERROR("RESET SREQ: Power::reboot() pedido (uptime %lus)", (unsigned long)(millis() / 1000));
     notifyReboot.notifyObservers(NULL);
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     waypointStore.saveToFlash();

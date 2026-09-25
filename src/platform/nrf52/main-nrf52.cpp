@@ -173,6 +173,8 @@ void timedSystemSleepSeconds(uint32_t seconds)
     // 3. Apagar el RTC2 y reiniciar: el arranque restaura radio y perifericos.
     nrf_rtc_task_trigger(NRF_RTC2, NRF_RTC_TASK_STOP);
     NVIC_DisableIRQ(RTC2_IRQn);
+    LOG_ERROR("RESET SREQ: storm cumplido (uptime %lus) -- reinicio para restaurar la radio",
+              (unsigned long)(millis() / 1000));
     NVIC_SystemReset();
     while (1) {
         delay(1000);
@@ -533,6 +535,11 @@ extern "C" void lfs_assert(const char *reason)
     // TODO: this should not be done when SoftDevice is enabled as device will not boot back on soft reset
     // as some data is retained in RAM which will prevent re-enabling bluetooth stack
     // Google what Nordic has to say about NVIC_* + SoftDevice
+    // NAVARICO-V6 (25/09/2026): log explicito para poder atribuir un Reset reason 0x4 (SREQ) a ESTE
+    // camino. Sin esto, un reinicio por lfs_assert era indistinguible de cualquier otro reset pedido
+    // por software, y ademas deja la pista de que la LittleFS se corrompio.
+    LOG_ERROR("RESET SREQ: lfs_assert (LittleFS corrupta) -> reinicio para formatear (uptime %lus)",
+              (unsigned long)(millis() / 1000));
     NVIC_SystemReset();
 }
 
@@ -735,6 +742,10 @@ void cpuDeepSleep(uint32_t msecToWake)
          config.power.is_power_saving == true)) {
         sd_power_mode_set(NRF_POWER_MODE_LOWPWR);
         delay(msecToWake);
+        // NAVARICO-V6 (25/09/2026): log explicito para atribuir un Reset reason 0x4 (SREQ) a ESTE
+        // camino (sueno temporizado de tracker/sensor, que acaba en reset y no en System OFF).
+        LOG_ERROR("RESET SREQ: sueno temporizado de tracker/sensor cumplido (rol %d, %lums)",
+                  (int)config.device.role, (unsigned long)msecToWake);
         NVIC_SystemReset();
     } else {
         // Resume on user button press

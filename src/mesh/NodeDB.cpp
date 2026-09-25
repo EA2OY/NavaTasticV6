@@ -3275,12 +3275,24 @@ bool NodeDB::saveNodeDatabaseToDisk()
     if (filtroActivo) {
         // Se codifica SOLO el subconjunto critico. El intercambio es temporal y la restauracion NO
         // depende de que saveProto() salga bien: si algo lanzara, el vector original seguiria intacto
-        // porque el filtro se construyo en una COPIA. Esto es lo que impide el cuelgue: la base viva
-        // (a la que apunta `meshNodes`) nunca se encoge.
+        // porque el filtro se construyo en una COPIA.
+        //
+        // ⚠️ HALLAZGO H-02 DE LA AUDITORIA (25/09/2026): el swap SOLO no bastaba. `meshNodes` apunta
+        // a `nodeDatabase.nodes` y el tamaño visible de la base lo da `numMeshNodes`, que es un
+        // contador APARTE. Durante el saveProto() (E/S de flash, decenas de ms) el vector esta
+        // ENCOGIDO pero `numMeshNodes` sigue diciendo 18 -> cualquier lector que recorra la base en
+        // ese instante (readNextMeshNode, getNumOnlineMeshNodes, el camino BLE de PhoneAPI) se sale
+        // del vector. NO hay lock que cubra esto.
+        // ARREGLO: ajustar `numMeshNodes` al tamaño filtrado MIENTRAS dura el intercambio, y
+        // restaurarlo despues. Asi el contador y el vector SIEMPRE concuerdan y los lectores ven una
+        // base coherente (mas pequena, pero coherente) en vez de una inconsistente.
+        const pb_size_t numMeshNodesReal = numMeshNodes;
         nodeDatabase.nodes.swap(nodosCriticos);
+        numMeshNodes = (pb_size_t)nodeDatabase.nodes.size();
         pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
         ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
         nodeDatabase.nodes.swap(nodosCriticos); // se devuelve la base COMPLETA a memoria
+        numMeshNodes = numMeshNodesReal;        // y su contador, para que vuelvan a concordar
     } else {
         pb_get_encoded_size(&nodeDatabaseSize, meshtastic_NodeDatabase_fields, &nodeDatabase);
         ok = saveProto(nodeDatabaseFileName, nodeDatabaseSize, &meshtastic_NodeDatabase_msg, &nodeDatabase, false);
