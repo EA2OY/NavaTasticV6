@@ -3719,8 +3719,15 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             }
             // Regla de nombres: un canal con nombre de preset (o "Custom", o sin nombre, que es cuando el
             // firmware le pone el del preset) y la clave publica de fabrica NO es una red privada: es el
-            // canal publico de Meshtastic, y no debe entrar en el espejo.
-            if (navaCanalEsPublico(cs.settings[i])) {
+            // canal publico de Meshtastic, y no se admite como SECUNDARIO de un enlace (el principal si
+            // se acepta, con aviso; la potencia del nodo no se toca nunca).
+            // V5.3.1 (heredado 26/09/2026, commit 929264e51): al canal PRINCIPAL (slot 0) NO se le aplica
+            // este veto, solo el aviso que ya se da mas abajo con principalPublico. Motivo: los perfiles
+            // de la flota llevan la clave de fabrica en el canal 0, y vetar aqui impedia aplicar A
+            // PROPOSITO un enlace de red abierta (preset MediumFast, LongFast...) que es uno de los usos
+            // de set_url (preset + ajustes de radio de un plumazo). Los secundarios siguen vetados: ahi
+            // no hay red que valga.
+            if (i != 0 && navaCanalEsPublico(cs.settings[i])) {
                 char errBuf[170];
                 snprintf(errBuf, sizeof(errBuf),
                          "ERR: CANAL %d ('%s') ES EL CANAL PUBLICO DE MESHTASTIC (CLAVE DE FABRICA). NO SE APLICA", (int)i,
@@ -3833,9 +3840,8 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         std::string radioTxt = "RADIO: SIN DATOS EN EL ENLACE (SE MANTIENE LA ACTUAL)";
         if (cs.has_lora_config && cs.lora_config.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
             const meshtastic_Config_LoRaConfig &nl = cs.lora_config;
-            // Modulacion con los MISMOS rangos que validaba set_lora (retirado), frecuencia con el rango
-            // que validaba set_freq (retirado), y la potencia: el 0 es "por defecto de la region" (la
-            // MAXIMA), asi que no se acepta y se mantiene la del nodo, igual que hace set_txpower.
+            // Modulacion con los MISMOS rangos que validaba set_lora (retirado) y frecuencia con el
+            // rango que validaba set_freq (retirado). La potencia del enlace NO se usa (ver abajo).
             bool modulacionOk =
                 nl.use_preset ? ((uint8_t)nl.modem_preset <= (uint8_t)_meshtastic_Config_LoRaConfig_ModemPreset_MAX)
                               : (nl.spread_factor >= 5 && nl.spread_factor <= 12 && nl.coding_rate >= 4 &&
@@ -3845,7 +3851,11 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             // El "slot" de la radio (numero de canal dentro de la banda de la region) puede llegar a ~200
             // segun la region: no es el indice del canal de la tabla.
             bool slotOk = (nl.channel_num <= 200);
-            bool pwrOk = ((nl.tx_power >= -5 && nl.tx_power <= -1) || (nl.tx_power >= 1 && nl.tx_power <= NAVA_MAX_TX));
+            // V5.3.1 (heredado 26/09/2026, commit 929264e51): la POTENCIA no se toca NUNCA. No es un
+            // ajuste de red sino de ESTE nodo: su radio, su antena y su limite legal no tienen por que
+            // ser los del nodo que manda el enlace (puede ser una placa distinta). Se mantiene la que ya
+            // tiene y la respuesta lo dice. Para cambiarla esta /nava set_txpower, que es una orden
+            // explicita para ESTE nodo.
             if (!modulacionOk || !freqOk || !slotOk) {
                 radioTxt = "RADIO: DATOS INVALIDOS EN EL ENLACE (SE MANTIENE LA ACTUAL)";
             } else {
@@ -3853,8 +3863,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                                config.lora.modem_preset != nl.modem_preset || config.lora.bandwidth != nl.bandwidth ||
                                config.lora.spread_factor != nl.spread_factor || config.lora.coding_rate != nl.coding_rate ||
                                config.lora.channel_num != nl.channel_num ||
-                               config.lora.override_frequency != nl.override_frequency ||
-                               (pwrOk && config.lora.tx_power != nl.tx_power));
+                               config.lora.override_frequency != nl.override_frequency);
                 if (radioCambia) {
                     config.lora.region = nl.region;
                     config.lora.use_preset = nl.use_preset;
@@ -3864,7 +3873,7 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                     config.lora.coding_rate = nl.coding_rate;
                     config.lora.channel_num = nl.channel_num;
                     config.lora.override_frequency = nl.override_frequency;
-                    if (pwrOk) config.lora.tx_power = nl.tx_power;
+                    // V5.3.1: la potencia del enlace NO se copia (ver el comentario de arriba).
                     nodeDB->saveToDisk(SEGMENT_CONFIG);
                     prefs.lora_configured = 1;
                     prefs.lora_use_preset = config.lora.use_preset ? 1 : 0;
@@ -3878,16 +3887,17 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                     saveResiliencePrefs();
                 }
                 char rBuf[120];
+                // V5.3.1: la potencia que se muestra es SIEMPRE la del nodo (la del enlace nunca se aplica).
                 if (config.lora.use_preset)
                     snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d PRESET %d, SLOT %d, %ddBm%s", (int)config.lora.region,
                              (int)config.lora.modem_preset, (int)config.lora.channel_num, (int)config.lora.tx_power,
-                             pwrOk ? "" : " (POTENCIA DEL NODO)");
+                             " (POTENCIA DEL NODO)");
                 else
                     snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d %.4fMHz BW%u SF%u CR%u SLOT%u %ddBm%s", (int)config.lora.region,
                              config.lora.override_frequency, (unsigned)config.lora.bandwidth,
                              (unsigned)config.lora.spread_factor, (unsigned)config.lora.coding_rate,
                              (unsigned)config.lora.channel_num, (int)config.lora.tx_power,
-                             pwrOk ? "" : " (POTENCIA DEL NODO)");
+                             " (POTENCIA DEL NODO)");
                 radioTxt = rBuf;
             }
         }
@@ -5913,7 +5923,7 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
         return "set_preset: Cambia el preset LoRa y reinicia. Uso: /nava set_preset [long_fast|medium_fast|short_fast|long_slow|short_slow|medium_slow|long_moderate|short_turbo]";
     else if (topic == "set_url")
         return "set_url: Aplica los canales y la radio que vengan en una URL de meshtastic.org (reemplaza el juego "
-               "completo; el canal de rescate no se toca). Uso: /nava set_url <enlace>";
+               "completo; el canal de rescate no se toca y la potencia del nodo no se cambia). Uso: /nava set_url <enlace>";
     else if (topic == "set_lora" || topic == "set_freq")
         return "set_lora/set_freq: COMANDO RETIRADO. La modulacion se cambia con set_preset y la red completa con set_url";
     else if (topic == "panic")
@@ -6021,7 +6031,7 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
     }
     if (topic == "set_url") {
         return "set_url: Aplica los canales y la radio de una URL de meshtastic.org. REEMPLAZA: lo que no venga se "
-               "quita (el rescate no se toca). Uso: /nava set_url <enlace>";
+               "quita (el rescate no se toca y la potencia del nodo no se cambia). Uso: /nava set_url <enlace>";
     }
     if (topic == "set_cli_chan") {
         snprintf(buf, sizeof(buf), "CLI CHAN ACT: Slot %d (%s). USO: set_cli_chan [slot 1-7]", prefs.cliChannelSlot, channels.getName(prefs.cliChannelSlot));
