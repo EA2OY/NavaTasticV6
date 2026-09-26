@@ -181,6 +181,14 @@ Regla rápida para no equivocarte:
 Xiao Kit i2c+E22P** · en pruebas de campo en **Seed Solar P1, Heltec T114 y Heltec V3/V4**.
 *(Estado heredado de la serie V5; la V6 está pendiente de la campaña de pruebas sobre la base 2.8.0.)*
 
+**Manuales** (también disponibles en cada Release):
+- [Manual de comandos `/nava` (PDF)](docs/pdf/Manual_NavaTastic.pdf) · [versión en texto](docs/Manual_NavaTastic.md)
+- [Manual de uso e instalación (PDF)](docs/pdf/Manual_uso_NavaTastic.pdf) · [versión en texto](docs/Manual_uso_NavaTastic.md)
+
+> ⚠️ **En la Heltec T114 no existe `/nava help`**: es la única placa que no cabe con el motor `/nava`
+> completo, así que se compila sin la tabla de ayuda y el comando contesta `CONSULTA EL MANUAL`. Los
+> comandos, sus respuestas y sus errores **no cambian**. Si tienes una T114, el manual es tu referencia.
+
 
 ---
 
@@ -439,6 +447,15 @@ Quick rule to get it right:
 **Bench-test status**: verified on the bench on **Faketec, Promicro NRF52+E22P, Xiao Kit i2c and
 Xiao Kit i2c+E22P** · field-testing on **Seed Solar P1, Heltec T114 and Heltec V3/V4**.
 *(Status inherited from the V5 series; V6 is pending its own test campaign on the 2.8.0 base.)*
+
+**Manuals** (also available in every Release):
+- [`/nava` command manual (PDF)](docs/pdf/Manual_NavaTastic.pdf) · [text version](docs/Manual_NavaTastic.md)
+- [User and installation manual (PDF)](docs/pdf/Manual_uso_NavaTastic.pdf) · [text version](docs/Manual_uso_NavaTastic.md)
+
+> ⚠️ **On the Heltec T114 there is no `/nava help`**: it is the only board that does not fit with the
+> full `/nava` engine, so it is built without the help table and the command answers `CONSULTA EL
+> MANUAL`. Commands, replies and error messages are **unchanged**. With a T114, the manual is your
+> reference.
 
 ---
 
