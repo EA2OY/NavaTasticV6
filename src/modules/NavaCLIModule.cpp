@@ -2600,11 +2600,15 @@ std::string NavaCLIModule::generateFullChannelUrl()
 // ============================================================================================
 // V5.3 (bloque 5): AYUDANTES DE SEGURIDAD DEL ENLACE DE CANALES (set_url)
 // --------------------------------------------------------------------------------------------
-// Puertas que impiden que un enlace deje la red ABIERTA de verdad, disfrazada de red privada. No
-// bloquean "todo lo que no me gusta": solo lo que quita el cifrado. La clave publica de fabrica NO se
-// bloquea (decision del operador, 19/09): los 16 perfiles de la flota la llevan de fabrica en el canal
-// 0 y en el 1, asi que bloquearla dejaria el espejo de un nodo recien flasheado sin poder aplicarse.
-// Se AVISA, que es lo acordado.
+// V5.3.1 (heredado 26/09/2026, commits 33edb5ce7 y 929264e51): aqui YA NO HAY NINGUN VETO DE CLAVE
+// salvo los dos del canal PRINCIPAL (sin clave y con la clave apagada). Antes estas ayudas vetaban
+// canales: hoy solo ANOTAN en el log de serie lo que queda flojo, porque es lo que hace el firmware
+// oficial (que no valida nada) y dejar un canal asi es decision del operador. Los secundarios se
+// aplican TAL CUAL: con clave propia, con la publica de fabrica, sin clave (heredan la del principal)
+// o sin cifrar (alias 0). Lo unico que sigue vetado de un canal es el NOMBRE RESERVADO del firmware.
+// La clave publica de fabrica NO se bloquea en el principal (decision del operador, 19/09): los 16
+// perfiles de la flota la llevan de fabrica en el canal 0, y bloquearla dejaria el espejo de un nodo
+// recien flasheado sin poder aplicarse. Se AVISA en la respuesta.
 // ============================================================================================
 
 // La clave PUBLICA de fabrica (la que trae cualquier nodo recien salido de la caja). Llega como alias
@@ -3673,6 +3677,9 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         }
         while (!arg.empty() && arg.front() == ' ') arg.erase(0, 1);
         if (arg.empty()) {
+            // V5.3.1 (348f40cc6): los tres rechazos de ENLACE ROTO dejan rastro solo en el log de
+            // eventos (/nava log), no en el de serie: son fallos de transcripcion del operador.
+            logEvent("SET_URL RECH: enlace sin contenido");
             enqueueResponse(replyDest, replyChannel, "ERR: FALTA EL CONTENIDO DEL ENLACE (LO QUE VA TRAS LA #)", true, false, hops);
             return;
         }
@@ -3681,12 +3688,14 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         static uint8_t urlBuf[MESHTASTIC_MESHTASTIC_APPONLY_PB_H_MAX_SIZE];
         size_t urlLen = 0;
         if (!base64Decode(arg, urlBuf, urlLen, sizeof(urlBuf)) || urlLen == 0) {
+            logEvent("SET_URL RECH: enlace ilegible base64");
             enqueueResponse(replyDest, replyChannel, "ERR: ENLACE ILEGIBLE (BASE64)", true, false, hops);
             return;
         }
         static meshtastic_ChannelSet cs;
         memset(&cs, 0, sizeof(cs));
         if (!pb_decode_from_bytes(urlBuf, urlLen, &meshtastic_ChannelSet_msg, &cs) || cs.settings_count == 0) {
+            logEvent("SET_URL RECH: enlace ilegible contenido");
             enqueueResponse(replyDest, replyChannel, "ERR: ENLACE ILEGIBLE (CONTENIDO)", true, false, hops);
             return;
         }
@@ -3697,55 +3706,49 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             return (cs.settings[i].name[0] != '\0' || cs.settings[i].psk.size > 0);
         };
 
-        // 1) Nombres reservados (los usa el firmware para funciones especiales) y canales PUBLICOS
-        // disfrazados de privados (nombre de preset, o "Custom", con la clave de fabrica).
+        // 1) Nombres reservados (los usa el firmware para funciones especiales). En los canales
+        // SECUNDARIOS no se veta NADA mas: se aplican tal cual vengan, como hace el firmware oficial
+        // (con clave propia, con la publica, sin clave -heredan la del principal- o sin cifrar).
         for (uint8_t i = 0; i < (uint8_t)MAX_NUM_CHANNELS && i < cs.settings_count; i++) {
             if (!traeCanal(i) || i == 1) continue;
             const char *n = cs.settings[i].name;
             if (strcasecmp(n, Channels::adminChannel) == 0 || strcasecmp(n, Channels::gpioChannel) == 0 ||
                 strcasecmp(n, Channels::serialChannel) == 0 || strcasecmp(n, Channels::mqttChannel) == 0) {
-                char errBuf[140];
-                snprintf(errBuf, sizeof(errBuf), "ERR: NOMBRE RESERVADO (%s): admin/gpio/serial/mqtt son del firmware", n);
-                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+                // V5.3.1 (73cc76a48): cada rechazo deja rastro en los DOS logs. El nombre del canal que
+                // falla va en el mensaje: con varios canales en el enlace hay que saber cual es.
+                LOG_WARN("set_url RECHAZADA: nombre reservado (%s)", n);
+                logEvent("SET_URL RECH: nombre reservado %s", n);
+                enqueueResponse(replyDest, replyChannel, "ERR: URL NO ACEPTADA (VALORES NO ADMITIDOS O FALTAN CANALES)", true,
+                                false, hops);
                 return;
             }
-            // Un hueco con el alias 0 queda SIN CIFRAR de verdad (no hereda la clave del principal), asi
-            // que deja la red abierta aunque los demas canales vayan cifrados.
-            if (navaClaveSinCifrar(cs.settings[i])) {
-                char errBuf[170];
-                snprintf(errBuf, sizeof(errBuf), "ERR: CANAL %d SIN CIFRAR (LA CLAVE VIENE APAGADA). NO SE APLICA", (int)i);
-                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
-                return;
-            }
-            // Regla de nombres: un canal con nombre de preset (o "Custom", o sin nombre, que es cuando el
-            // firmware le pone el del preset) y la clave publica de fabrica NO es una red privada: es el
-            // canal publico de Meshtastic, y no se admite como SECUNDARIO de un enlace (el principal si
-            // se acepta, con aviso; la potencia del nodo no se toca nunca).
-            // V5.3.1 (heredado 26/09/2026, commit 929264e51): al canal PRINCIPAL (slot 0) NO se le aplica
-            // este veto, solo el aviso que ya se da mas abajo con principalPublico. Motivo: los perfiles
-            // de la flota llevan la clave de fabrica en el canal 0, y vetar aqui impedia aplicar A
-            // PROPOSITO un enlace de red abierta (preset MediumFast, LongFast...) que es uno de los usos
-            // de set_url (preset + ajustes de radio de un plumazo). Los secundarios siguen vetados: ahi
-            // no hay red que valga.
-            if (i != 0 && navaCanalEsPublico(cs.settings[i])) {
-                char errBuf[170];
-                snprintf(errBuf, sizeof(errBuf),
-                         "ERR: CANAL %d ('%s') ES EL CANAL PUBLICO DE MESHTASTIC (CLAVE DE FABRICA). NO SE APLICA", (int)i,
-                         cs.settings[i].name[0] != '\0' ? cs.settings[i].name : "sin nombre");
-                enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
-                return;
-            }
+            // V5.3.1 (33edb5ce7): los secundarios se aplican TAL CUAL. El detalle de lo que queda flojo
+            // NO va en la respuesta (el operador ya sabe lo que envia) ni en el log de eventos que se lee
+            // por radio: solo al log de serie, que es donde se puede mirar de verdad. Ramas excluyentes,
+            // en este orden: sin clave propia, sin cifrar (alias 0) y publico de fabrica.
+            if (i >= 2 && cs.settings[i].psk.size == 0)
+                LOG_WARN("set_url: el canal %d no trae clave propia; hereda la del principal", (int)i);
+            else if (i >= 2 && navaClaveSinCifrar(cs.settings[i]))
+                LOG_WARN("set_url: el canal %d va sin cifrar", (int)i);
+            else if (i >= 2 && navaCanalEsPublico(cs.settings[i]))
+                LOG_WARN("set_url: el canal %d es el canal publico de Meshtastic", (int)i);
         }
 
         // 2) Sin canal principal no hay nodo que valga, y un principal SIN CLAVE dejaria el canal 0
-        // abierto (ademas, los secundarios que no traigan clave propia heredan esa clave vacia).
+        // abierto (ademas, los secundarios que no traigan clave propia heredan esa clave vacia). Es la
+        // unica red de seguridad por clave que queda: la exencion del principal publico NO la cubre.
         if (!traeCanal(0)) {
-            enqueueResponse(replyDest, replyChannel, "ERR: EL ENLACE NO TRAE CANAL PRINCIPAL. NO SE APLICA", true, false, hops);
+            LOG_WARN("set_url RECHAZADA: el enlace no trae canal principal");
+            logEvent("SET_URL RECH: sin canal principal");
+            enqueueResponse(replyDest, replyChannel, "ERR: URL NO ACEPTADA (VALORES NO ADMITIDOS O FALTAN CANALES)", true, false,
+                            hops);
             return;
         }
         if (navaClaveApagada(cs.settings[0])) {
-            enqueueResponse(replyDest, replyChannel, "ERR: EL CANAL PRINCIPAL VIENE SIN CLAVE (RED ABIERTA). NO SE APLICA", true,
-                            false, hops);
+            LOG_WARN("set_url RECHAZADA: el canal principal viene sin clave");
+            logEvent("SET_URL RECH: principal sin clave");
+            enqueueResponse(replyDest, replyChannel, "ERR: URL NO ACEPTADA (VALORES NO ADMITIDOS O FALTAN CANALES)", true, false,
+                            hops);
             return;
         }
         // El principal es la raiz de la red. La clave publica NO se bloquea (los perfiles de la flota la
@@ -3758,10 +3761,10 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
         uint8_t cliSlotAplicar = prefs.cliChannelSlot;
         if (cliSlotAplicar < 1 || cliSlotAplicar > 7) cliSlotAplicar = 1;
         if (cliSlotAplicar >= 2 && !traeCanal(cliSlotAplicar)) {
-            char errBuf[150];
-            snprintf(errBuf, sizeof(errBuf),
-                     "ERR: EL ENLACE DEJARIA AL NODO SIN CANAL DE CONSOLA (SLOT %d). NO SE APLICA", cliSlotAplicar);
-            enqueueResponse(replyDest, replyChannel, errBuf, true, false, hops);
+            LOG_WARN("set_url RECHAZADA: el enlace dejaria al nodo sin canal de consola");
+            logEvent("SET_URL RECH: sin canal de consola");
+            enqueueResponse(replyDest, replyChannel, "ERR: URL NO ACEPTADA (VALORES NO ADMITIDOS O FALTAN CANALES)", true, false,
+                            hops);
             return;
         }
         // La consola tampoco se bloquea por llevar la clave publica (el canal de consola clasico, el slot
@@ -3785,7 +3788,8 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             char nombreAntes[16];
             snprintf(nombreAntes, sizeof(nombreAntes), "%s", antes.settings.name);
             if (i == 1) {
-                if (habia && traeCanal(1)) puestos++;
+                // V5.3.1: el slot 1 NO suma en el recuento. No se aplica nunca, asi que contarlo daba un
+                // numero que no se correspondia con lo que se escribe. Solo se mira si DIFIERE, para el aviso.
                 if (traeCanal(1) && (strcmp(cs.settings[1].name, antes.settings.name) != 0 ||
                                      cs.settings[1].psk.size != antes.settings.psk.size ||
                                      (cs.settings[1].psk.size > 0 &&
@@ -3887,17 +3891,22 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
                     saveResiliencePrefs();
                 }
                 char rBuf[120];
-                // V5.3.1: la potencia que se muestra es SIEMPRE la del nodo (la del enlace nunca se aplica).
+                char pwrTxt[24];
+                // V5.3.1: si el nodo no tiene la potencia fijada se dice SIN FIJAR, nunca un 0 que parece
+                // un cero de verdad. La potencia que se muestra es SIEMPRE la del nodo.
+                if (config.lora.tx_power == 0)
+                    snprintf(pwrTxt, sizeof(pwrTxt), "SIN FIJAR");
+                else
+                    snprintf(pwrTxt, sizeof(pwrTxt), "%ddBm", (int)config.lora.tx_power);
                 if (config.lora.use_preset)
-                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d PRESET %d, SLOT %d, %ddBm%s", (int)config.lora.region,
-                             (int)config.lora.modem_preset, (int)config.lora.channel_num, (int)config.lora.tx_power,
+                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d PRESET %d, SLOT %d, %s%s", (int)config.lora.region,
+                             (int)config.lora.modem_preset, (int)config.lora.channel_num, pwrTxt,
                              " (POTENCIA DEL NODO)");
                 else
-                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d %.4fMHz BW%u SF%u CR%u SLOT%u %ddBm%s", (int)config.lora.region,
+                    snprintf(rBuf, sizeof(rBuf), "RADIO: REG%d %.4fMHz BW%u SF%u CR%u SLOT%u %s%s", (int)config.lora.region,
                              config.lora.override_frequency, (unsigned)config.lora.bandwidth,
                              (unsigned)config.lora.spread_factor, (unsigned)config.lora.coding_rate,
-                             (unsigned)config.lora.channel_num, (int)config.lora.tx_power,
-                             " (POTENCIA DEL NODO)");
+                             (unsigned)config.lora.channel_num, pwrTxt, " (POTENCIA DEL NODO)");
                 radioTxt = rBuf;
             }
         }
@@ -3928,7 +3937,15 @@ void NavaCLIModule::executeCommand(NodeNum fromNode, std::string cmd, uint8_t re
             resp += ". AVISO: SOLO TRAE 1 CANAL: SE APLICA COMO PRINCIPAL (para el juego completo usa ch_url all)";
         }
         resp += ". " + radioTxt;
-        resp += radioCambia ? ". REINICIO DIFERIDO PARA APLICAR LA RADIO" : ". SIN REINICIO (la radio no cambia)";
+        // V5.3.1 (48ded4f22 y 348f40cc6): solo se dice SIN REINICIO si de verdad no hay nada pendiente.
+        // Si una orden anterior (set_txpower, set_preset) dejo el reinicio armado, el nodo reinicia igual
+        // y hay que decirlo. Solo las acciones que reinician de verdad: MUTE, STORM, TXOFF y KEYS_CLEAR
+        // NO reinician, asi que no cuentan.
+        bool reinicioPendiente = (deferredAction == NAVA_DEFERRED_REBOOT || deferredAction == NAVA_DEFERRED_FACTORY_RESET ||
+                                  deferredAction == NAVA_DEFERRED_FULL_RESET || deferredAction == NAVA_DEFERRED_WIPE ||
+                                  deferredAction == NAVA_DEFERRED_LORA_CHANGE);
+        resp += radioCambia ? ". SE REINICIA PARA APLICAR LA RADIO"
+                            : (reinicioPendiente ? ". REINICIO PENDIENTE DE UNA ORDEN ANTERIOR" : ". SIN REINICIO");
         enqueueResponse(replyDest, replyChannel, resp, true, false, hops);
         logEvent("SET_URL: %d puestos, %d quitados", puestos, quitados);
 
@@ -5862,6 +5879,23 @@ std::string NavaCLIModule::getRoleName(meshtastic_Config_DeviceConfig_Role role)
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// NAVARICO-V6 (decision del operador, 26/09/2026): GATILLO DE ESPACIO - AYUDA DE /nava
+// ---------------------------------------------------------------------------------------------
+// La ayuda NO es una funcion del motor: es una guia para cuando el operador se atasca. En las
+// placas que van al filo de flash (las 12 nRF52) se compila SIN ella y quien la necesite tira del
+// manual. Nada de lo que hace el motor depende de esto.
+//
+// COMO ESTA MONTADO, Y POR QUE ASI:
+//   - `helpForCommand()` es el bloque grande (~8 KB de textos). Se compila solo si NO esta definido
+//     NAVA_SIN_AYUDA. Al no existir la funcion, el enlazador no puede meter sus cadenas.
+//   - Los 44 puntos del motor que llaman a `usageAndState()` NO SE TOCAN: la funcion sigue
+//     existiendo y sigue devolviendo algo util (una linea corta), que es lo que se ve cuando alguien
+//     manda un comando sin argumentos. Tocar 44 sitios del motor para ganar ~1 KB no compensa el
+//     riesgo.
+//   - Los mensajes de ERROR de los comandos NO son ayuda: son comportamiento, y no se tocan.
+// =============================================================================================
+#ifndef NAVA_SIN_AYUDA
 std::string NavaCLIModule::helpForCommand(const std::string &topic)
 {
     if (topic == "ping")
@@ -6015,6 +6049,7 @@ std::string NavaCLIModule::helpForCommand(const std::string &topic)
         return "help: Muestra la lista de comandos o ayuda de uno concreto. Uso: /nava help [comando]";
     return "Comando no reconocido. Escribe /nava help para ver la lista.";
 }
+#endif // !NAVA_SIN_AYUDA
 
 std::string NavaCLIModule::usageAndState(const std::string &topic)
 {
@@ -6225,7 +6260,14 @@ std::string NavaCLIModule::usageAndState(const std::string &topic)
         snprintf(buf, sizeof(buf), "PANIC_OK: Consolida permanentemente el salto de panico activo.");
         return buf;
     }
+#ifndef NAVA_SIN_AYUDA
     return helpForCommand(topic);
+#else
+    // Sin la tabla de ayuda: una linea corta y honesta. Se sigue viendo QUE comando es y que falta
+    // un argumento, que es lo unico que el motor necesita saber para no quedarse a medias.
+    snprintf(buf, sizeof(buf), "%s: FALTA ARGUMENTO. CONSULTA EL MANUAL.", topic.c_str());
+    return buf;
+#endif
 }
 
 std::string NavaCLIModule::base64Encode(const uint8_t *data, size_t len)
