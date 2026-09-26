@@ -20,7 +20,8 @@
 > potencia del nodo**, aplica los canales secundarios tal cual vienen y deja rastro de los rechazos.
 >
 > 💡 **Lo más fácil**: el **[flasher web](https://ea2oy.github.io/NavaTastic-Flasher/)** graba el firmware en el nodo
-> desde el navegador, sin instalar nada (nRF52840 y Heltec V3/V4).
+> desde el navegador, sin instalar nada (nRF52840 y Heltec V3/V4). **Elige `NavaTastic V6` en el desplegable**:
+> al abrirlo sale la V5.3.1 por defecto.
 
 ---
 
@@ -156,7 +157,8 @@ repetidor por el canal privado, aunque el mando solo tenga cobertura con uno.
 
 ### 🔧 ¿Prefieres hacerlo a mano? Compilar o flashear binarios
 
-- **[Flasher web](https://ea2oy.github.io/NavaTastic-Flasher/)**: graba el firmware desde el navegador, sin instalar programas (nRF52840 y Heltec V3/V4)
+- **[Flasher web](https://ea2oy.github.io/NavaTastic-Flasher/)**: graba el firmware desde el navegador, sin instalar programas (nRF52840 y Heltec V3/V4).
+  ⚠️ **Al abrirlo sale la V5.3.1 por defecto: elige `NavaTastic V6` en el desplegable de versión** antes de grabar.
 - **Compilar desde el código**: `pio run` compila de una vez los **16 entornos de infraestructura**
   (12 nRF52840 + 4 ESP32) definidos en `default_envs`; para una sola placa, `pio run -e <entorno>`.
 
@@ -311,7 +313,8 @@ Firmware **NavaTastic** — an optimized and hardened [Meshtastic](https://mesht
 > transmit power**, applies secondary channels exactly as they arrive and leaves a trace of rejections.
 >
 > 💡 **Easiest way**: the **[web flasher](https://ea2oy.github.io/NavaTastic-Flasher/)** writes the firmware to your node
-> straight from the browser, nothing to install (nRF52840 and Heltec V3/V4).
+> straight from the browser, nothing to install (nRF52840 and Heltec V3/V4). **Pick `NavaTastic V6` in the
+> dropdown**: it opens on V5.3.1 by default.
 
 ---
 
@@ -393,6 +396,7 @@ the private channel, even if the controller only has coverage with one node.
 
 ### 2️⃣ Step 2: Flash NavaTastic Firmware
 * **Easiest, nothing to install**: the **[web flasher](https://ea2oy.github.io/NavaTastic-Flasher/)** writes the firmware to your node straight from the browser (recent Chrome, Edge or Firefox, on a computer).
+  ⚠️ **It opens on V5.3.1 by default: pick `NavaTastic V6` in the version dropdown** before flashing.
 * **Via USB (.UF2)**: Connect to PC, **double-tap the RESET button** to enter DFU bootloader mode, and drag & drop the appropriate `.uf2` file.
 * **Via OTA (.zip)**: If already connected over Bluetooth, use the Meshtastic App OTA update feature with the corresponding `.zip` file.
 * **Bluetooth Pairing**: Default connection PIN is **`654321`** (`FIXED_PIN` mode).
