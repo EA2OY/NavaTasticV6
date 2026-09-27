@@ -758,6 +758,25 @@ void cpuDeepSleep(uint32_t msecToWake)
         // FIXME, use non-init RAM per
         // https://devzone.nordicsemi.com/f/nordic-q-a/48919/ram-retention-settings-with-softdevice-enabled
 
+        // NAVARICO-V6 (27/09/2026) -- FALTABA, y el nodo dormia pero NO DESPERTABA.
+        // En NavaTastic V5.3.1 estas dos cosas van AQUI, justo antes de configurar el LPCOMP, y
+        // estan probadas en campo: el apagado de la alimentacion de la radio y una espera de 3 s.
+        // En la V6 el bloque se habia quedado SOLO en la ruta del modo tormenta
+        // (timedSystemSleepSeconds), y la ruta de dormir por bateria baja / System OFF se quedo sin
+        // el. Sintoma exacto medido en banco: se duerme bien y al subir la tension NO despierta,
+        // con la MISMA placa y la MISMA prueba que en V5.3.1 si despierta.
+        // El orden importa y se copia tal cual del original: apagar la radio, dejar que la tension
+        // se asiente, y solo despues armar el comparador y entrar en System OFF.
+#ifdef RADIO_POWER_ENABLE_PIN
+        // Apagar el modulo de radio entero: ahorra ~40 mA durante todo el apagado.
+        pinMode(RADIO_POWER_ENABLE_PIN, OUTPUT);
+        digitalWrite(RADIO_POWER_ENABLE_PIN, LOW);
+#endif
+
+        // LINEA ROJA del proyecto: este delay(3000) es DISENO, no un descuido. Deja asentar la
+        // alimentacion tras cortar la radio antes de configurar el LPCOMP. NO se acorta ni se quita.
+        delay(3000);
+
 #ifdef BATTERY_LPCOMP_INPUT
         // Only enable LPCOMP wake if the variant allows it
         if (variant_enableBatteryLpcompWake()) {
