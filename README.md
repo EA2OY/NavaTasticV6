@@ -10,6 +10,25 @@
 
 </div>
 
+> ## ⚠️ AVISO IMPORTANTE — la V6 todavía **NO** es apta para desplegar en routers
+>
+> **La resiliencia energética de NavaTastic (dormir y despertar por batería) NO funciona en esta
+> versión.** El nodo se duerme, pero al bajar del umbral de batería baja **puede entrar en un bucle de
+> reinicio en vez de quedarse dormido**, y **no está garantizado que despierte** al recuperar tensión.
+>
+> **Hasta que esto se cierre:**
+>
+> - ❌ **No la uses en routers ni en infraestructura fija** que tenga que aguantar sin batería.
+> - ✅ **Sí puedes usarla para "cacharreo"**: pruebas de radio, laboratorio y banco.
+> - 👉 Para nodos que vayan a estar desplegados de verdad, **usa `NavaTastic V5.3.1`**, que sí duerme y
+>   despierta correctamente.
+>
+> El resto de la V6 funciona con normalidad: base **Meshtastic 2.8.0**, enlace de canales (`/nava set_url`),
+> protección de la memoria flash y el resto de comandos `/nava`.
+>
+> _Hay trabajo en curso sobre la causa. Este aviso se retirará cuando el dormir-despertar esté verificado
+> en banco._
+
 > ℹ️ **NavaTastic V6** es la generación construida sobre **Meshtastic 2.8.0 oficial** (commit
 > `7239fe8`), heredando todo lo que ya funcionaba en **NavaTastic Eclipse V5.3.1** (base 2.7.26).
 > El árbol es el del firmware oficial **con los cambios del fork encima**: `git diff` contra la base
